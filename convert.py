@@ -35,7 +35,7 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description="Raster icon -> clean SVG")
     ap.add_argument("inputs", nargs="+", help="image files and/or folders")
     ap.add_argument("-o", "--out", help="output folder (default: <input folder>/Output or next to the file)")
-    ap.add_argument("--mode", choices=["auto", "stroke", "outline"], default="auto",
+    ap.add_argument("--mode", choices=["auto", "stroke", "outline"], default="outline",
                     help="stroke = centre-line strokes (editable line icons), outline = filled shapes")
     ap.add_argument("--tolerance", type=float, default=0.30,
                     help="curve fit tolerance in px @130px; higher = fewer anchors (default 0.30)")

@@ -240,7 +240,7 @@ def simplify(start, segs, closed, tol, corner_deg=35.0, straight_tol=0.08, keep_
     return out
 
 
-def fillet(start, segs, closed, tol, keep_line, max_len, sharp_r):
+def fillet(start, segs, closed, tol, keep_line, max_len, sharp_r, wide_factor=1.0):
     """Clean up the joint between two long straight edges: the short wiggly
     segments between them become either one tangent-continuous curve (a
     rounded corner, 2 anchors) or a crisp corner at the lines' intersection."""
@@ -292,6 +292,8 @@ def fillet(start, segs, closed, tol, keep_line, max_len, sharp_r):
         # blur rounds acute corners more: scale the allowance by 1/sin(half interior angle)
         half = np.arccos(np.clip(-dA @ dB, -1, 1)) / 2
         lim = sharp_r / max(np.sin(half), 0.3)
+        if 2 * half > np.radians(100):
+            lim *= wide_factor  # wide bends (a chin, a shoulder) are rounded on purpose
         if X is not None and np.min(np.linalg.norm(pts - X, axis=1)) < lim \
                 and (X - A[0]) @ dA > 0 and (B[3] - X) @ dB > 0:
             # crisp corner: extend both lines to their intersection
@@ -308,9 +310,10 @@ def fillet(start, segs, closed, tol, keep_line, max_len, sharp_r):
             out.extend(run)
         i = j
     if closed:
-        last = out.pop()  # sentinel (possibly modified start)
-        out[0] = [np.array([last[0][0], out[0][0][1], out[0][0][2], out[0][0][3]]) if False else last[0], True]
-        start = out[0][0][0]
+        last = out.pop()  # sentinel: the first line again, its START possibly moved to a new corner
+        a, b = last[0][0], out[0][0][3]  # keep the (possibly moved) END of the real first line
+        out[0] = [np.array([a, a + (b - a) / 3, a + 2 * (b - a) / 3, b]), True]
+        start = a
     else:
         start = out[0][0][0]
     res = []

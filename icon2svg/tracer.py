@@ -204,7 +204,7 @@ def find_corners(pd, ds, opt, s, closed=True):
             continue
         # sharp corners keep most of their turning at half the scale,
         # smooth arcs lose about half of it
-        if th[i] / max(tk[i], 1e-6) < 0.72 and tk[i] < 100:
+        if th[i] / max(tk[i], 1e-6) < 0.72 and tk[i] < opt.extra.get("sure_corner", 100):
             continue
         cand.append(i)
     # suppress corners that are too close
@@ -466,7 +466,8 @@ def fit_path(raw, closed, opt, s, circles=True):
     keep = opt.extra.get("keep_line", 2.6) * s
     segs = simplify(nodes[0], segs, closed, opt.tolerance * s, straight_tol=0.08 * s, keep_line=keep)
     start, segs = fillet(nodes[0], segs, closed, opt.tolerance * s * 1.5, keep,
-                         opt.extra.get("fillet_len", 8.0) * s, opt.extra.get("sharp_r", 0.45) * s)
+                         opt.extra.get("fillet_len", 8.0) * s, opt.extra.get("sharp_r", 0.45) * s,
+                         opt.extra.get("wide_factor", 1.0))
     start, segs = snap_axis(start, segs, closed, opt.axis_snap)
     return ("path" if closed else "open", (start, segs))
 
@@ -606,10 +607,20 @@ def trace(img, opt=None, return_shapes=False):
                 return svg, info, [(kd, _scale_shape(kd, dt, k)) for kd, dt in allsh]
             return svg, info
 
+    # outline tuning (compared against Vector Magic): only real corners stay
+    # corners, straight pieces must be long, gentle bends become one smooth
+    # curve, and narrow tips blurred by the raster are rebuilt sharp
+    import dataclasses
+    ex = dict(opt.extra)
+    ex.setdefault("sharp_r", 1.3)
+    ex.setdefault("keep_line", 2.2)
+    ex.setdefault("wide_factor", 0.4)
+    oopt = dataclasses.replace(opt, corner_angle=max(opt.corner_angle, 55), min_line=max(opt.min_line, 3.0),
+                               tolerance=opt.tolerance * 1.33, extra=ex)
     shapes = []
     for c in extract_contours(work, opt, s):
         try:
-            shapes.append(fit_path(c, True, opt, s))
+            shapes.append(fit_path(c, True, oopt, s))
         except Exception:  # never lose a shape: fall back to a polygon
             pts = c[:: max(1, len(c) // 64)]
             shapes.append(("path", (pts[0], [("L", p) for p in pts[1:]] + [("L", pts[0])])))
