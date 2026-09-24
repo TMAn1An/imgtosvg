@@ -731,6 +731,12 @@ def trace_strokes(work, opt, s):
         shapes.append(fit_path(pts, closed, smooth if closed else sopt, s))
     if opt.extra.get("primitives", True):
         shapes = regularize(shapes, s, w)
+    if opt.extra.get("refine", True):
+        # render -> compare -> fix: sit every line exactly on the ink centre
+        from .refine import refine_shapes
+        shapes = refine_shapes(shapes, work, w)
+        if opt.extra.get("primitives", True):
+            shapes = regularize(shapes, s, w)
     return shapes, fills, w
 
 

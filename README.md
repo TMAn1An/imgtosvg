@@ -128,7 +128,11 @@ Illustrator থেকে এক্সপোর্ট করা SVG পরিষ�
 4. প্রতিটা path: corner detection → সোজা অংশ = line (H/V snap) → বাকি অংশ tangent-continuous cubic Bezier
    (anchor x/y extrema-তে রাখার চেষ্টা) → Simplify (যতক্ষণ tolerance-এর মধ্যে থাকে anchor বাদ) →
    দুটো সোজা লাইনের মাঝের কোণা হয় পরিষ্কার sharp corner নাহয় ২-anchor fillet
-5. Auto মোড stroke রেজাল্ট রেন্ডার করে ইনপুটের সাথে মিলিয়ে দেখে; না মিললে outline দেয়
+5. **Render → compare → fix** (Designer/Stroke): প্রতিটা লাইনের উপর দিয়ে আড়াআড়ি মেপে দেখে
+   ink-এর আসল মাঝখান কোথায়, তারপর anchor ও handle-এর দৈর্ঘ্য সামান্য সরিয়ে লাইনটা ঠিক মাঝখানে বসায়
+   (anchor সংখ্যা, সোজা/H/V লাইন, handle-এর দিক একই থাকে)। Stroke মোডে রেন্ডার করে মিলিয়ে
+   সবচেয়ে মানানসই লাইনের মোটা বেছে নেয়। বন্ধ করতে: `--no-refine`
+6. Auto মোড stroke রেজাল্ট রেন্ডার করে ইনপুটের সাথে মিলিয়ে দেখে; না মিললে outline দেয়
 
 ## ফাইল
 

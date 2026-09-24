@@ -47,6 +47,8 @@ def main(argv=None):
     ap.add_argument("--no-symmetry", action="store_true", help="do not make mirror-symmetric icons exactly symmetric")
     ap.add_argument("--no-primitives", action="store_true",
                     help="do not redraw regions as exact rectangles/ellipses/polygons (pure tracing)")
+    ap.add_argument("--no-refine", action="store_true",
+                    help="skip the render-compare-fix pass that puts every line on the ink centre")
     ap.add_argument("--decimals", type=int, default=2)
     a = ap.parse_args(argv)
 
@@ -54,9 +56,14 @@ def main(argv=None):
     if not files:
         print("No images found.")
         return 1
+    extra = {}
+    if a.no_primitives:
+        extra["primitives"] = False
+    if a.no_refine:
+        extra["refine"] = False
     opt = Options(mode=a.mode, tolerance=a.tolerance, stroke_width=a.stroke_width, size=a.size,
                   color=a.color, detect_circles=not a.no_circles, decimals=a.decimals,
-                  symmetry=not a.no_symmetry, extra={} if not a.no_primitives else {"primitives": False})
+                  symmetry=not a.no_symmetry, extra=extra)
     ok = 0
     for f in files:
         if a.out:

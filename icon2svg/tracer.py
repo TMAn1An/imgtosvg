@@ -596,6 +596,9 @@ def trace(img, opt=None, return_shapes=False):
             use = _stroke_fidelity(work, strokes, fills, sw) >= 0.83
         if opt.stroke_width > 0:
             sw = opt.stroke_width / k
+        elif opt.mode == "stroke" and strokes and opt.extra.get("refine", True):
+            from .refine import refine_width
+            sw = refine_width(strokes, fills, work, sw, opt.decimals)
         if use:
             body = ""
             if strokes:
