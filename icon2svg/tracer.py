@@ -17,6 +17,7 @@ from skimage import measure
 from .bezier import fit_curve, line_fit, intersect, snap_dir, unit, simplify, fillet, snap_axis
 
 BASE = 130.0  # all length parameters are tuned for a 130 px icon
+DESIGNER_WEIGHT = 2.4 / 130  # line weight of the "designer" style, relative to the icon size
 
 
 @dataclass
@@ -31,7 +32,7 @@ class Options:
     blur: float = 0.35            # pre-blur sigma (px)
     detect_circles: bool = True
     color: str = "auto"           # "auto" or a css colour
-    mode: str = "auto"            # "auto" | "stroke" | "outline"
+    mode: str = "auto"            # "auto" | "designer" | "stroke" | "outline"
     decimals: int = 2
     scale: float = 1.0            # output scale factor
     size: float = 0               # >0: scale output so the longest side is `size`
@@ -582,10 +583,14 @@ def trace(img, opt=None, return_shapes=False):
     head = f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {fmt(Wo, 2)} {fmt(Ho, 2)}">\n'
 
 
-    if opt.mode in ("stroke", "auto"):
+    if opt.mode in ("stroke", "auto", "designer"):
         from .stroke import trace_strokes
         strokes, fills, sw = trace_strokes(work, opt, s)
-        use = opt.mode == "stroke"
+        use = opt.mode in ("stroke", "designer")
+        if opt.mode == "designer" and opt.stroke_width <= 0:
+            # the light, uniform line weight of professionally drawn line icons
+            # (2.4 on a 130 px canvas, as in the AI-redrawn references)
+            sw = DESIGNER_WEIGHT * max(work.shape)
         if opt.mode == "auto" and strokes:
             # accept the stroke result only if it reproduces the icon well
             use = _stroke_fidelity(work, strokes, fills, sw) >= 0.83
@@ -601,7 +606,7 @@ def trace(img, opt=None, return_shapes=False):
                 body += f'  <path fill="{fill}" fill-rule="evenodd" d="{shapes_to_d(fills, opt.decimals, k)}"/>\n'
             svg = head + body + "</svg>\n"
             allsh = strokes + fills
-            info = {"mode": "stroke", "anchors": count_anchors(allsh), "shapes": len(allsh),
+            info = {"mode": opt.mode if opt.mode != "auto" else "stroke", "anchors": count_anchors(allsh), "shapes": len(allsh),
                     "color": fill, "stroke_width": round(float(sw * k), 3)}
             if return_shapes:
                 return svg, info, [(kd, _scale_shape(kd, dt, k)) for kd, dt in allsh]

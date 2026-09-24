@@ -318,6 +318,13 @@ def primitive_closed(P, s, w, loose=1.0):
     """Best exact primitive for a closed boundary, or None.
     Occam: the candidate with the fewest anchors that fits well enough wins."""
     cands = []  # (shape, error)
+    size = max(np.ptp(P[:, 0]), np.ptp(P[:, 1]))
+    if size < 3.5 * w:
+        # tiny regions (a collar flap, the gap in a tie knot): the fixed
+        # tolerances would let almost any shape "fit"; only allow the simple
+        # polygons such details really are, else leave it to the curve fitter
+        V = fit_polygon(P, s, w, True, max_vertices=4)
+        return polygon_shape(V, True) if V is not None else None
     e = fit_circle_ellipse(P, s, w)
     if e is not None:
         cands.append(e)

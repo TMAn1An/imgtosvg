@@ -4,6 +4,7 @@
 
 - **শার্প ও স্মুথ**: সোজা লাইন একদম সোজা (H/V লাইন axis-এ snap করা), কার্ভ মসৃণ
 - **কম anchor point**: Illustrator-এর *Simplify* এর মতো অপ্রয়োজনীয় পয়েন্ট বাদ দেয়
+- **Designer মোড (ডিফল্ট)**: ডিজাইনার/AI-রিড্রর মতো পাতলা, সমান লাইন (130px-এ 2.4) + circle/rect/polygon + সিমেট্রি
 - **Stroke মোড**: centre-line stroke, round cap/join, এক stroke-width. Illustrator/Figma-তে ঠিক যেভাবে লাইন আইকন আঁকা হয়
 - **Outline মোড**: filled/solid আইকনের জন্য filled path
 - **Auto মোড**: দুটোর মধ্যে যেটা ভালো মেলে সেটা নিজে বেছে নেয়
@@ -53,7 +54,7 @@ python convert.py Input/ --color currentColor    # CSS থেকে রঙ ন�
 
 | অপশন | কাজ |
 |---|---|
-| `--mode auto/stroke/outline` | আউটপুট স্টাইল (ডিফল্ট `auto`) |
+| `--mode designer/outline/stroke/auto` | আউটপুট স্টাইল (ডিফল্ট `designer`; `outline` = Vector Magic-এর মতো ভরাট শেপ) |
 | `--tolerance` | কার্ভ ফিটিং টলারেন্স (130px আইকন অনুযায়ী px)। বাড়ালে পয়েন্ট কমে ও বেশি স্মুথ হয়। ডিফল্ট `0.30`, স্বাভাবিক রেঞ্জ `0.2 – 0.7` |
 | `--stroke-width` | stroke-এর পুরুত্ব জোর করে সেট করা (আউটপুট ইউনিটে) |
 | `--size` | লম্বা দিকটা এই সাইজে স্কেল হবে (24, 48, 64, 512…) |

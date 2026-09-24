@@ -105,11 +105,11 @@
     <div class="panel" id="localopts">
       <label class="f">Output style</label>
       <div class="seg" id="mode">
-        <button data-v="outline" class="on">Outline</button>
+        <button data-v="designer" class="on">Designer</button>
+        <button data-v="outline">Outline</button>
         <button data-v="stroke">Stroke</button>
-        <button data-v="auto">Auto</button>
       </div>
-      <div class="hint">Outline = filled shapes, traced like Vector Magic (most faithful). Stroke = editable centre-line strokes. Auto picks one per icon.</div>
+      <div class="hint">Designer = clean geometric line icon with a light, even line weight (like a designer / AI redraw). Outline = filled shapes traced like Vector Magic. Stroke = like Designer but keeps the image's line weight.</div>
     </div>
     <div class="panel local-only">
       <label class="f">Smoothness <span id="tolv" class="sub"></span></label>
@@ -163,7 +163,7 @@
 const $ = s => document.querySelector(s);
 let files = [];          // File objects
 let results = [];        // server results
-let mode = "outline";
+let mode = "designer";
 let engine = "local";
 const urls = new Map();
 
