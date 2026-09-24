@@ -3,6 +3,8 @@
 import io
 import os
 import threading
+import time
+import uuid
 import webbrowser
 import zipfile
 
@@ -103,26 +105,63 @@ def ai_models():
         return jsonify({"error": str(e)}), 400
 
 
-@app.post("/api/ai/convert")
-def ai_convert():
+_jobs = {}
+
+
+def _run_job(jid, img, prov, form):
+    job = _jobs[jid]
+    try:
+        n_ex = int(form.get("examples", 2))
+        examples = _ai.load_examples(os.path.join(HERE, "examples"), n_ex) if n_ex > 0 else []
+        sw = float(form.get("stroke_width") or 0) or None
+        svg, info = _ai.redraw(img, prov, rounds=int(form.get("rounds", 2)), examples=examples,
+                               stroke_width=sw, log=job["log"].append, n_examples=n_ex,
+                               should_stop=lambda: job["cancel"])
+        job["result"] = {"name": job["name"], "svg": svg, **info}
+        job["status"] = "done"
+    except _ai.Cancelled:
+        job["status"] = "cancelled"
+    except Exception as e:
+        job["log"].append(f"  ERROR: {e}")
+        job["result"] = {"name": job["name"], "error": str(e)}
+        job["status"] = "error"
+
+
+@app.post("/api/ai/start")
+def ai_start():
     f = request.files.get("file")
     if f is None:
         return jsonify({"error": "no file"}), 400
     name = os.path.splitext(os.path.basename(f.filename or "icon"))[0]
-    logs = []
     try:
         prov = _provider(request.form)
         img = cv2.imdecode(np.frombuffer(f.read(), np.uint8), cv2.IMREAD_UNCHANGED)
         if img is None:
             raise ValueError("unsupported image")
-        n_ex = int(request.form.get("examples", 2))
-        examples = _ai.load_examples(os.path.join(HERE, "examples"), n_ex) if n_ex > 0 else []
-        sw = float(request.form.get("stroke_width") or 0) or None
-        svg, info = _ai.redraw(img, prov, rounds=int(request.form.get("rounds", 2)), examples=examples,
-                               stroke_width=sw, log=logs.append, n_examples=n_ex)
-        return jsonify({"name": name, "svg": svg, "log": logs, **info})
     except Exception as e:
-        return jsonify({"name": name, "error": str(e), "log": logs})
+        return jsonify({"error": str(e)}), 400
+    jid = uuid.uuid4().hex[:12]
+    _jobs[jid] = {"name": name, "status": "running", "log": [], "result": None, "cancel": False,
+                  "t0": time.time()}
+    threading.Thread(target=_run_job, args=(jid, img, prov, dict(request.form)), daemon=True).start()
+    return jsonify({"job": jid})
+
+
+@app.get("/api/ai/job/<jid>")
+def ai_job(jid):
+    job = _jobs.get(jid)
+    if job is None:
+        return jsonify({"error": "unknown job"}), 404
+    return jsonify({"status": job["status"], "log": job["log"][-30:], "result": job["result"],
+                    "elapsed": round(time.time() - job["t0"])})
+
+
+@app.post("/api/ai/job/<jid>/cancel")
+def ai_cancel(jid):
+    job = _jobs.get(jid)
+    if job:
+        job["cancel"] = True
+    return jsonify({"ok": True})
 
 
 @app.post("/api/zip")

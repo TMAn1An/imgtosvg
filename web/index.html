@@ -14,6 +14,7 @@
            --accent:#5b8cff; --accent-ink:#0b0d10; --ok:#4cc38a; }
   }
   *{box-sizing:border-box}
+  a{color:var(--accent)}
   body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
   header{display:flex;align-items:center;gap:12px;padding:16px 24px;border-bottom:1px solid var(--line);background:var(--panel)}
   header h1{font-size:18px;margin:0;font-weight:650;letter-spacing:.2px}
@@ -199,7 +200,10 @@ async function refreshKeyState() {
   try {
     const c = await (await fetch("/api/ai/config")).json();
     const has = (c.has_key || {})[$("#prov").value];
-    $("#keystate").textContent = has ? "A saved key is used (leave the field empty)." : ($("#prov").value === "ollama" ? "" : "No saved key yet.");
+    const prov = $("#prov").value;
+    $("#keystate").innerHTML = has ? '<b style="color:var(--ok)">✓ Key saved on this PC.</b> No need to paste it again; the box stays empty on purpose. Paste a new key only to replace it.'
+      : (prov === "ollama" ? "No key needed." : "No saved key yet: paste it and press Save once.");
+    $("#key").placeholder = has ? "•••••••• saved" : "paste your key";
   } catch (e) {}
 }
 $("#prov").onchange = () => { showEngine(); refreshKeyState(); $("#model").value = ""; };
@@ -217,24 +221,67 @@ $("#check").onclick = async () => {
     $("#modelhint").textContent = `Key works. ${r.models.length} models; auto = ${r.auto}`;
   } catch (e) { $("#modelhint").textContent = "Error: " + e.message; }
 };
-$("#airun").onclick = () => aiConvert(files.map((f, k) => k));
-
-async function aiConvert(indices) {
-  if (!indices.length) return;
-  $("#airun").disabled = true;
-  let done = 0;
-  for (const k of indices) {
-    $("#stats").innerHTML = `<span class="spin"></span>AI redraw ${done + 1} / ${indices.length}: ${files[k].name}`;
-    const fd = aiForm();
-    fd.append("file", files[k]);
-    let r;
-    try { r = await (await fetch("/api/ai/convert", { method: "POST", body: fd })).json(); }
-    catch (e) { r = { name: files[k].name, error: String(e) }; }
-    results[k] = r;
-    done++;
-    render();
+$("#airun").onclick = async () => {
+  if (aiRunning) {  // acts as Stop while running
+    aiStop = true;
+    if (currentJob) await fetch(`/api/ai/job/${currentJob}/cancel`, { method: "POST" });
+    $("#airun").disabled = true; $("#airun").textContent = "Stopping after this round ...";
+    return;
   }
-  $("#airun").disabled = false;
+  aiConvert(files.map((f, k) => k));
+};
+
+let aiRunning = false, aiStop = false, currentJob = null;
+async function aiConvert(indices) {
+  if (!indices.length || aiRunning) return;
+  aiRunning = true; aiStop = false;
+  $("#airun").textContent = "Stop"; $("#airun").classList.remove("primary");
+  let done = 0;
+  try {
+    for (const k of indices) {
+      if (aiStop) break;
+      $("#stats").innerHTML = `<span class="spin"></span>AI redraw ${done + 1} / ${indices.length}: ${files[k].name}`;
+      results[k] = { name: files[k].name.replace(/\.[^.]+$/, ""), pending: true, log: ["  starting ..."], elapsed: 0,
+                     prev: results[k] && !results[k].pending ? results[k] : null };
+      render();
+      const fd = aiForm();
+      fd.append("file", files[k]);
+      let r;
+      try {
+        const st = await (await fetch("/api/ai/start", { method: "POST", body: fd })).json();
+        if (st.error) throw new Error(st.error);
+        currentJob = st.job;
+        while (true) {
+          await new Promise(res => setTimeout(res, 1000));
+          const j = await (await fetch("/api/ai/job/" + st.job)).json();
+          if (j.status === "running") {
+            results[k].log = j.log; results[k].elapsed = j.elapsed; updatePending(k);
+            continue;
+          }
+          if (j.status === "cancelled") { r = results[k].prev || { name: results[k].name, error: "stopped" }; }
+          else r = j.result;
+          if (r && j.log) r.log = j.log;
+          break;
+        }
+      } catch (e) { r = { name: files[k].name, error: String(e.message || e) }; }
+      currentJob = null;
+      results[k] = r;
+      done++;
+      render();
+    }
+  } finally {
+    aiRunning = false;
+    $("#airun").textContent = "Redraw all with AI"; $("#airun").classList.add("primary");
+    $("#airun").disabled = false;
+  }
+}
+function updatePending(k) {
+  const el = document.querySelector(`[data-k="${k}"] .ailog`);
+  const r = results[k];
+  if (!el) { render(); return; }
+  el.textContent = r.log.slice(-4).join("\n");
+  const t = document.querySelector(`[data-k="${k}"] .elapsed`);
+  if (t) t.textContent = r.elapsed + " s";
 }
 try { if (localStorage.getItem("engine") === "ai") document.querySelector('#engine button[data-v="ai"]').click(); } catch (e) {}
 showEngine(); refreshKeyState();
@@ -286,7 +333,7 @@ async function reconvert() {
   try {
     const r = await fetch("/api/convert", { method: "POST", body: fd });
     const data = await r.json();
-    if (my !== busy) return;
+    if (my !== busy || engine === "ai") return;
     results = data;
     render();
   } catch (e) {
@@ -356,8 +403,23 @@ function render() {
     if (!r) return;
     const card = document.createElement("div");
     card.className = "card";
+    card.dataset.k = k;
+    if (r.pending) {
+      card.innerHTML = `
+        <div class="pair">
+          <div class="pane"><span class="tag">input</span><img src="${url(files[k])}"></div>
+          <div class="pane" style="flex-direction:column;gap:8px;padding:10px;background:#fafafa">
+            <span class="spin" style="width:22px;height:22px"></span>
+            <pre class="ailog" style="margin:0;font-size:11px;white-space:pre-wrap;color:#444;max-width:100%;overflow:hidden">${r.log.slice(-4).join("\n")}</pre>
+          </div>
+        </div>
+        <div class="meta"><div><div class="name">${r.name}.svg</div><div class="sub">AI is working · <span class="elapsed">${r.elapsed} s</span></div></div></div>`;
+      grid.appendChild(card);
+      return;
+    }
     if (r.error) {
-      card.innerHTML = `<div class="err">${r.name}: ${r.error}</div>`;
+      card.innerHTML = `<div class="err"><b>${r.name}</b>: ${r.error}</div>` +
+        (r.log ? `<pre style="margin:0 12px 12px;font-size:11px;white-space:pre-wrap">${r.log.slice(-6).join("\n")}</pre>` : "");
     } else {
       ok++; total += r.anchors;
       const svgView = showWire ? wire(r.svg) : r.svg;
@@ -391,7 +453,7 @@ function save(name, blob) {
 
 $("#zip").onclick = async () => {
   const r = await fetch("/api/zip", { method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(results.filter(x => !x.error).map(x => ({ name: x.name, svg: x.svg }))) });
+    body: JSON.stringify(results.filter(x => x && !x.error && x.svg).map(x => ({ name: x.name, svg: x.svg }))) });
   save("svg_icons.zip", await r.blob());
 };
 </script>

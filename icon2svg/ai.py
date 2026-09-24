@@ -226,6 +226,7 @@ class MockProvider:
         return ["mock"]
 
     def generate(self, system, parts, log=print):
+        time.sleep(float(os.environ.get("MOCK_DELAY", 0)))
         if any("text" in p and "Automatic trace" in p["text"] for p in parts):
             self.calls = 0  # a new icon starts
             self.__dict__.pop("_full", None)
@@ -517,8 +518,12 @@ def _input_png(img, size=512):
 
 
 # ============================================================== pipeline ==
+class Cancelled(Exception):
+    pass
+
+
 def redraw(img, provider, rounds=2, examples=None, stroke_width=None, target=0.97, log=print,
-           use_trace_hint=True, n_examples=2):
+           use_trace_hint=True, n_examples=2, should_stop=None):
     """Redraw one icon with the model, refining against the input.
     Returns (svg, info)."""
     from .tracer import Options, fmt, to_ink, trace
@@ -544,8 +549,15 @@ def redraw(img, provider, rounds=2, examples=None, stroke_width=None, target=0.9
 
     best = None
     history = []
+    model = provider.resolve_model()
     for rnd in range(rounds + 1):
+        if should_stop and should_stop():
+            if best is None:
+                raise Cancelled("stopped")
+            log("  stopped by user, keeping the best drawing so far")
+            break
         t0 = time.time()
+        log(f"  round {rnd}: {model} is drawing ..." if rnd == 0 else f"  round {rnd}: {model} is correcting ...")
         try:
             answer = provider.generate(sys_prompt, parts, log=log)
         except ProviderError as e:
