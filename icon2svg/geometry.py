@@ -86,7 +86,7 @@ def _ellipse_ls(Q):
     return cx + m[0], cy + m[1], np.sqrt(k / a), np.sqrt(k / b)
 
 
-def fit_circle_ellipse(P, s, w, robust=True):
+def fit_circle_ellipse(P, s, w, robust=True, min_cover=0.85):
     """Axis-aligned ellipse (or circle) through a closed boundary.
     Robust: parts of the boundary that belong to something touching the
     ellipse (a notch, a joining line) are ignored if most of it is on it.
@@ -123,7 +123,7 @@ def fit_circle_ellipse(P, s, w, robust=True):
     dE = _nearest_dist(E, P[inl]) if inl.sum() else np.full(len(E), 1e9)
     cover = (dE < 0.6 * s + 0.05 * r).mean()
     rms = np.sqrt(np.mean(dev[inl] ** 2)) if inl.any() else 1e9
-    if frac < (0.85 if robust else 0.98) or cover < 0.85 or rms > 0.22 * s + 0.02 * r:
+    if frac < (0.85 if robust else 0.98) or cover < min_cover or rms > 0.22 * s + 0.02 * r:
         return None
     # tolerated outliers must be notches *into* the ellipse; anything that
     # sticks out means the region is not an ellipse
@@ -336,13 +336,26 @@ def primitive_closed(P, s, w, loose=1.0):
     if V is not None:
         pg = polygon_shape(V, True)
         cands.append((pg, _err(P, pg)))
+    td = fit_teardrop(P, s, w)
+    if td is not None:
+        cands.append(td)
     if not cands:
         return None
 
     def anchors(sh):
         return 4 if sh[0] == "circle" else len(sh[1][1])
     good_tol = 0.3 * s + 0.07 * w
-    good = [(anchors(sh), e, sh) for sh, e in cands if e <= good_tol]
+    def cost(sh):
+        n = anchors(sh)
+        if sh[0] == "path" and all(sg[0] == "L" for sg in sh[1][1]) and n > 4:
+            # sharp polygons with short diagonal "chamfer" edges are usually
+            # rounded corners that the raster lost; prefer the rounded shape
+            pts = [np.asarray(sh[1][0])] + [np.asarray(sg[1]) for sg in sh[1][1]]
+            lens = [np.linalg.norm(pts[k + 1] - pts[k]) for k in range(len(pts) - 1)]
+            short = sum(1 for L in lens if L < 3.0 * s + 0.5 * w)
+            n += 2 * short
+        return n
+    good = [(cost(sh), e, sh) for sh, e in cands if e <= good_tol]
     if good:
         good.sort(key=lambda t: (t[0], t[1]))
         return good[0][2]
@@ -470,3 +483,67 @@ def rounded_polygon_shape(V, R):
         if h1 is not None:
             segs.append(("C", h1, h2, p_out))
     return ("path", (start, segs))
+
+
+# ------------------------------------------------------------ teardrop ----
+def _circle_ls(Q):
+    m = Q.mean(0)
+    q = Q - m
+    M = np.c_[2 * q, np.ones(len(q))]
+    sol, *_ = np.linalg.lstsq(M, (q ** 2).sum(1), rcond=None)
+    cx, cy = sol[0], sol[1]
+    r = np.sqrt(max(sol[2] + cx * cx + cy * cy, 1e-9))
+    return np.array([cx, cy]) + m, r
+
+
+def teardrop_shape(C, r, T):
+    """Circle C,r with two straight tangents meeting at the tip T (a map pin)."""
+    v = T - C
+    d = np.linalg.norm(v)
+    phi = np.arctan2(v[1], v[0])
+    a = np.arccos(np.clip(r / d, -1, 1))
+    t1, t2 = phi + a, phi - a + 2 * np.pi  # go round the far side of the circle
+    P1 = C + r * np.array([np.cos(t1), np.sin(t1)])
+    segs = [("L", P1)]
+    segs += arc_to_cubics(C, r, t1, t2)
+    segs.append(("L", T.copy()))
+    return ("path", (T.copy(), segs))
+
+
+def fit_teardrop(P, s, w):
+    best = None
+    x0, y0 = P.min(0)
+    x1, y1 = P.max(0)
+    W, H = x1 - x0, y1 - y0
+    # the round end may point up, down, left or right
+    for sel in (P[:, 1] < y0 + 0.8 * W, P[:, 1] > y1 - 0.8 * W,
+                P[:, 0] < x0 + 0.8 * H, P[:, 0] > x1 - 0.8 * H):
+        if sel.sum() < 12:
+            continue
+        C, r = _circle_ls(P[sel])
+        for _ in range(3):
+            dev = np.abs(np.linalg.norm(P - C, axis=1) - r)
+            inl = dev < 0.35 * s + 0.03 * r
+            if inl.sum() < 12:
+                break
+            C, r = _circle_ls(P[inl])
+        if r < 2 * s:
+            continue
+        dist = np.linalg.norm(P - C, axis=1)
+        T = P[int(np.argmax(dist))].copy()
+        d = dist.max()
+        if not (1.3 * r < d < 3.5 * r):
+            continue
+        shape = teardrop_shape(C, r, T)
+        Q = shape_points(shape)
+        # the tip itself usually sits inside a junction (it rests on the base):
+        # judge the fit away from it
+        far_P = np.linalg.norm(P - T, axis=1) > 0.45 * (d - r) + 1.5 * s
+        far_Q = np.linalg.norm(Q - T, axis=1) > 0.45 * (d - r) + 1.5 * s
+        dev = _nearest_dist(P[far_P], Q)
+        dev2 = _nearest_dist(Q[far_Q], P)
+        rms = np.sqrt(np.mean(dev ** 2))
+        if rms < 0.3 * s + 0.07 * w and dev2.max() < 0.9 * s + 0.2 * w:
+            if best is None or rms < best[0]:
+                best = (rms, shape)
+    return None if best is None else (best[1], best[0])

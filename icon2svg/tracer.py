@@ -576,8 +576,10 @@ def trace(img, opt=None, return_shapes=False):
     scale = opt.size / max(H, W) if opt.size > 0 else opt.scale
     k = scale / f
     Wo, Ho = W * scale, H * scale
-    head = (f'<svg xmlns="http://www.w3.org/2000/svg" width="{fmt(Wo, 2)}" height="{fmt(Ho, 2)}" '
-            f'viewBox="0 0 {fmt(Wo, 2)} {fmt(Ho, 2)}">\n')
+    # viewBox only (no width/height): browsers then scale the icon to fit the
+    # window, like SVGs exported from Illustrator with "responsive" on
+    head = f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {fmt(Wo, 2)} {fmt(Ho, 2)}">\n'
+
 
     if opt.mode in ("stroke", "auto"):
         from .stroke import trace_strokes

@@ -177,6 +177,8 @@ def snap_all(shapes, deg=4.0):
 
 
 def regularize(shapes, s, w):
+    from .symfit import snap_handles
+    shapes = snap_handles(shapes)
     shapes = snap_all(shapes)
     shapes = align(shapes, s, w)
     shapes = merge_collinear(shapes, s, w)
