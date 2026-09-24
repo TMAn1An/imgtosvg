@@ -79,7 +79,7 @@
         <div style="height:10px"></div>
         <label class="f">API key</label>
         <div class="row">
-          <input type="password" id="key" placeholder="paste your key" style="flex:1">
+          <input type="password" id="key" placeholder="paste your key (several: separate with commas)" style="flex:1">
           <button class="btn" id="savekey" title="Remember this key on this PC (config.json)">Save</button>
         </div>
         <div class="hint" id="keystate"></div>
@@ -90,7 +90,7 @@
           <button class="btn" id="check">Check</button>
         </div>
         <datalist id="models"></datalist>
-        <div class="hint" id="modelhint">auto = newest Flash model your key can use.</div>
+        <div class="hint" id="modelhint">auto = gemini-flash-lite-latest (largest free quota). Try gemini-flash-latest for higher quality.</div>
         <div style="height:10px"></div>
         <div class="row">
           <div style="flex:1"><label class="f">Correction rounds</label>
@@ -169,7 +169,7 @@ const urls = new Map();
 
 // ---------------------------------------------------------------- engine --
 const HINTS = {
-  gemini: 'Free key: <a href="https://aistudio.google.com/apikey" target="_blank">aistudio.google.com/apikey</a>. The free tier allows a limited number of requests per day.',
+  gemini: 'Free key: <a href="https://aistudio.google.com/apikey" target="_blank">aistudio.google.com/apikey</a>. The free tier allows a limited number of requests per day. You can paste several keys separated by commas; when one runs out the next is used.',
   openrouter: 'Key: <a href="https://openrouter.ai/keys" target="_blank">openrouter.ai/keys</a>. Models ending in <b>:free</b> cost nothing. Enter the model name.',
   ollama: 'Runs on your PC, no key needed. Install <a href="https://ollama.com" target="_blank">ollama.com</a>, then e.g. <code>ollama pull qwen2.5vl:7b</code> and enter that model name. Needs a good GPU; quality is lower than Gemini.',
   anthropic: 'Key: <a href="https://console.anthropic.com" target="_blank">console.anthropic.com</a> (paid).',
@@ -201,9 +201,9 @@ async function refreshKeyState() {
     const c = await (await fetch("/api/ai/config")).json();
     const has = (c.has_key || {})[$("#prov").value];
     const prov = $("#prov").value;
-    $("#keystate").innerHTML = has ? '<b style="color:var(--ok)">✓ Key saved on this PC.</b> No need to paste it again; the box stays empty on purpose. Paste a new key only to replace it.'
+    $("#keystate").innerHTML = has ? '<b style="color:var(--ok)">✓ Key(s) saved on this PC.</b> No need to paste it again; the box stays empty on purpose. Paste a new key only to replace it.'
       : (prov === "ollama" ? "No key needed." : "No saved key yet: paste it and press Save once.");
-    $("#key").placeholder = has ? "•••••••• saved" : "paste your key";
+    $("#key").placeholder = has ? "•••••••• saved" : "paste your key (several: separate with commas)";
   } catch (e) {}
 }
 $("#prov").onchange = () => { showEngine(); refreshKeyState(); $("#model").value = ""; };
@@ -432,6 +432,7 @@ function render() {
           <div style="min-width:0">
             <div class="name">${r.name}.svg</div>
             <div class="sub">${r.mode === "ai" ? "AI · " + r.model + " · match " + Math.round(r.score * 100) + "%" : r.mode} · ${r.anchors} anchors${r.stroke_width ? " · stroke " + r.stroke_width : ""}</div>
+            ${r.fallback ? `<div class="sub" style="color:var(--anchor)" title="${String(r.ai_error || "").replace(/"/g, "&quot;")}">AI failed, offline Designer result shown. Error: ${String(r.ai_error || "").slice(0, 140).replace(/</g, "&lt;")}</div>` : ""}
           </div>
           <button class="btn">Download</button>
         </div>`;

@@ -66,16 +66,39 @@ def _retry(fn, log, tries=5):
 
 
 class GeminiProvider:
+    """Google Gemini. Uses the official google-genai SDK when installed (the
+    same call that works in the user's icon_tool), else plain REST.
+
+    Several keys (one per line / comma separated) are rotated: when one hits
+    its free-tier limit (429) the next key is used."""
     name = "gemini"
     base = "https://generativelanguage.googleapis.com/v1beta"
+    # most free-tier quota and cheapest; proven to work in the user's own tool
+    DEFAULT_MODEL = "gemini-flash-lite-latest"
 
     def __init__(self, api_key, model="auto", min_interval=4.0):
-        if not api_key:
+        keys = [k.strip() for k in re.split(r"[\s,;]+", api_key or "") if k.strip()]
+        if not keys:
             raise ProviderError("Gemini API key missing (get one free at https://aistudio.google.com/apikey)")
-        self.key = api_key
+        self.keys = keys
+        self.ki = 0
+        self.key = keys[0]
         self.model = model
         self.min_interval = min_interval
         self._last = 0.0
+        try:
+            from google import genai  # noqa: F401
+            self.sdk = True
+        except ImportError:
+            self.sdk = False
+
+    def _next_key(self, log):
+        if len(self.keys) < 2:
+            return False
+        self.ki = (self.ki + 1) % len(self.keys)
+        self.key = self.keys[self.ki]
+        log(f"  switching to API key #{self.ki + 1}")
+        return True
 
     def list_models(self):
         out = _http_json(f"{self.base}/models?pageSize=200", headers={"x-goog-api-key": self.key})
@@ -86,47 +109,68 @@ class GeminiProvider:
         return names
 
     def resolve_model(self):
-        if self.model and self.model != "auto":
-            return self.model
-        names = self.list_models()
-        bad = ("lite", "image", "tts", "audio", "live", "embedding", "vision", "thinking-exp", "learnlm", "gemma")
-
-        def version(n):
-            m = re.search(r"gemini-(\d+(?:\.\d+)?)", n)
-            return float(m.group(1)) if m else 0.0
-        flash = [n for n in names if "flash" in n and not any(b in n for b in bad)]
-        if not flash:
-            flash = [n for n in names if n.startswith("gemini")]
-        if not flash:
-            raise ProviderError("No usable Gemini model found for this key")
-        # newest version first; prefer stable names over -preview/-exp
-        flash.sort(key=lambda n: (version(n), "preview" not in n and "exp" not in n), reverse=True)
-        self.model = flash[0]
+        if not self.model or self.model == "auto":
+            self.model = self.DEFAULT_MODEL
         return self.model
+
+    def _call_sdk(self, model, prompt_parts):
+        from google import genai
+        from google.genai import types
+        client = genai.Client(api_key=self.key)
+        parts = []
+        for p in prompt_parts:
+            if "text" in p:
+                parts.append(types.Part.from_text(text=p["text"]))
+            else:
+                parts.append(types.Part.from_bytes(data=p["image"], mime_type="image/png"))
+        try:
+            resp = client.models.generate_content(model=model, contents=parts)
+        except Exception as e:  # map SDK errors onto ours (429 -> retry / next key)
+            code = getattr(e, "code", None) or getattr(e, "status_code", None)
+            err = ProviderError(f"Gemini error {code or ''}: {e}")
+            err.status = code if isinstance(code, int) else (429 if "429" in str(e) or "RESOURCE_EXHAUSTED" in str(e) else None)
+            err.body = str(e)
+            raise err
+        return resp.text or ""
+
+    def _call_rest(self, model, prompt_parts):
+        gparts = []
+        for p in prompt_parts:
+            if "text" in p:
+                gparts.append({"text": p["text"]})
+            else:
+                gparts.append({"inline_data": {"mime_type": "image/png",
+                                               "data": base64.b64encode(p["image"]).decode()}})
+        body = {"contents": [{"role": "user", "parts": gparts}]}
+        out = _http_json(f"{self.base}/models/{model}:generateContent", body, {"x-goog-api-key": self.key})
+        try:
+            cparts = out["candidates"][0]["content"]["parts"]
+        except (KeyError, IndexError):
+            raise ProviderError(f"Empty answer from Gemini: {json.dumps(out)[:400]}")
+        return "".join(p.get("text", "") for p in cparts if not p.get("thought"))
 
     def generate(self, system, parts, log=print):
         model = self.resolve_model()
         wait = self.min_interval - (time.time() - self._last)
         if wait > 0:
             time.sleep(wait)
-        gparts = []
-        for p in parts:
-            if "text" in p:
-                gparts.append({"text": p["text"]})
-            else:
-                gparts.append({"inline_data": {"mime_type": "image/png",
-                                               "data": base64.b64encode(p["image"]).decode()}})
-        body = {"system_instruction": {"parts": [{"text": system}]},
-                "contents": [{"role": "user", "parts": gparts}],
-                "generationConfig": {"temperature": 0.4, "maxOutputTokens": 16384}}
-        url = f"{self.base}/models/{model}:generateContent"
-        out = _retry(lambda: _http_json(url, body, {"x-goog-api-key": self.key}), log)
+        # like the user's working tool: the instructions go in as the first text part
+        prompt_parts = [{"text": system}] + list(parts)
+        call = self._call_sdk if self.sdk else self._call_rest
+
+        def attempt():
+            tried = 0
+            while True:
+                try:
+                    return call(model, prompt_parts)
+                except ProviderError as e:
+                    if getattr(e, "status", None) == 429 and tried < len(self.keys) - 1 and self._next_key(log):
+                        tried += 1
+                        continue
+                    raise
+        out = _retry(attempt, log)
         self._last = time.time()
-        try:
-            cparts = out["candidates"][0]["content"]["parts"]
-        except (KeyError, IndexError):
-            raise ProviderError(f"Empty answer from Gemini: {json.dumps(out)[:400]}")
-        return "".join(p.get("text", "") for p in cparts if not p.get("thought"))
+        return out
 
 
 class OpenAICompatProvider:
@@ -523,13 +567,13 @@ class Cancelled(Exception):
 
 
 def redraw(img, provider, rounds=2, examples=None, stroke_width=None, target=0.97, log=print,
-           use_trace_hint=True, n_examples=2, should_stop=None):
+           use_trace_hint=True, n_examples=2, should_stop=None, fallback=True):
     """Redraw one icon with the model, refining against the input.
     Returns (svg, info)."""
     from .tracer import Options, fmt, to_ink, trace
     H, W = img.shape[:2]
     ink, color = to_ink(img)
-    local_svg, local_info = trace(img, Options(mode="stroke"))
+    local_svg, local_info = trace(img, Options(mode="designer"))
     sw = stroke_width or local_info.get("stroke_width") or max(W, H) / 48
     sw = round(float(sw) * 2) / 2 or 0.5
     sys_prompt = SYSTEM.replace("{W}", fmt(W, 2)).replace("{H}", fmt(H, 2)).replace("{SW}", fmt(sw, 2))
@@ -563,7 +607,13 @@ def redraw(img, provider, rounds=2, examples=None, stroke_width=None, target=0.9
         except ProviderError as e:
             log(f"  model error: {e}")
             if best is None:
-                raise
+                if not fallback:
+                    raise
+                # never leave the user empty-handed: the offline Designer drawing
+                log("  -> using the offline Designer result instead")
+                info = {"mode": "designer", "fallback": True, "ai_error": str(e)[:300],
+                        "anchors": local_info.get("anchors"), "stroke_width": local_info.get("stroke_width")}
+                return local_svg, info
             break
         raw = extract_svg(answer)
         if raw is None:
