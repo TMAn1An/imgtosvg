@@ -43,6 +43,9 @@ def main(argv=None):
     ap.add_argument("--size", type=float, default=0, help="scale so the longest side equals SIZE (e.g. 24, 64, 512)")
     ap.add_argument("--color", default="auto", help='fill/stroke colour, e.g. "#000000" or "currentColor"')
     ap.add_argument("--no-circles", action="store_true", help="do not replace round shapes by true circles")
+    ap.add_argument("--no-symmetry", action="store_true", help="do not make mirror-symmetric icons exactly symmetric")
+    ap.add_argument("--no-primitives", action="store_true",
+                    help="do not redraw regions as exact rectangles/ellipses/polygons (pure tracing)")
     ap.add_argument("--decimals", type=int, default=2)
     a = ap.parse_args(argv)
 
@@ -51,7 +54,8 @@ def main(argv=None):
         print("No images found.")
         return 1
     opt = Options(mode=a.mode, tolerance=a.tolerance, stroke_width=a.stroke_width, size=a.size,
-                  color=a.color, detect_circles=not a.no_circles, decimals=a.decimals)
+                  color=a.color, detect_circles=not a.no_circles, decimals=a.decimals,
+                  symmetry=not a.no_symmetry, extra={} if not a.no_primitives else {"primitives": False})
     ok = 0
     for f in files:
         if a.out:

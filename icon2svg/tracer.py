@@ -36,6 +36,7 @@ class Options:
     scale: float = 1.0            # output scale factor
     size: float = 0               # >0: scale output so the longest side is `size`
     stroke_width: float = 0       # >0: force this stroke width (output units)
+    symmetry: bool = True         # make mirror-symmetric parts exactly symmetric
     extra: dict = field(default_factory=dict)
 
 
@@ -114,6 +115,49 @@ def extract_contours(ink, opt, s):
         if area < opt.min_area * s * s:
             continue
         out.append(pts)
+    return out
+
+
+def _mirror(img, c):
+    """Mirror img horizontally about the vertical line x = c (pixel units)."""
+    h, w = img.shape
+    M = np.float32([[-1, 0, 2 * c - 1], [0, 1, 0]])  # pixel centres at i+0.5
+    return cv2.warpAffine(img, M, (w, h), flags=cv2.INTER_LINEAR, borderValue=0)
+
+
+def symmetrize(ink, min_score=0.80):
+    """If the icon (or a large part of it) is mirror-symmetric about a vertical
+    axis, average both halves wherever they agree. Asymmetric details are kept."""
+    h, w = ink.shape
+    cols = ink.sum(0)
+    if cols.sum() <= 0:
+        return ink
+    cx = (cols * (np.arange(w) + 0.5)).sum() / cols.sum()
+    best = (-1, cx)
+    for c in np.arange(cx - 0.12 * w, cx + 0.12 * w, 0.25):
+        m = _mirror(ink, c)
+        inter = np.minimum(ink, m).sum()
+        union = np.maximum(ink, m).sum()
+        sc = inter / max(union, 1e-6)
+        if sc > best[0]:
+            best = (sc, c)
+    for c in np.arange(best[1] - 0.25, best[1] + 0.25, 0.05):
+        m = _mirror(ink, c)
+        sc = np.minimum(ink, m).sum() / max(np.maximum(ink, m).sum(), 1e-6)
+        if sc > best[0]:
+            best = (sc, c)
+    score, c = best
+    if score < min_score:
+        return ink
+    m = _mirror(ink, c)
+    # agree = both sides have (roughly) the same ink here, allowing a small shift
+    near = cv2.dilate(m, np.ones((3, 3), np.uint8))
+    near_i = cv2.dilate(ink, np.ones((3, 3), np.uint8))
+    agree = (np.abs(ink - m) < 0.5) | ((ink > 0.5) & (near > 0.5) & (near_i > 0.5) & (m > 0.15))
+    agree = cv2.GaussianBlur(agree.astype(np.float32), (0, 0), 0.8) > 0.5
+    out = ink.copy()
+    avg = (ink + m) / 2
+    out[agree] = avg[agree]
     return out
 
 
@@ -526,6 +570,8 @@ def trace(img, opt=None, return_shapes=False):
         work = cv2.resize(ink, (int(round(W * f)), int(round(H * f))), interpolation=cv2.INTER_AREA)
     s = max(work.shape) / BASE
     s = max(s, 0.5)
+    if opt.symmetry:
+        work = symmetrize(work)
     fill = color if opt.color == "auto" else opt.color
     scale = opt.size / max(H, W) if opt.size > 0 else opt.scale
     k = scale / f
@@ -539,7 +585,7 @@ def trace(img, opt=None, return_shapes=False):
         use = opt.mode == "stroke"
         if opt.mode == "auto" and strokes:
             # accept the stroke result only if it reproduces the icon well
-            use = _stroke_fidelity(work, strokes, fills, sw) >= 0.86
+            use = _stroke_fidelity(work, strokes, fills, sw) >= 0.83
         if opt.stroke_width > 0:
             sw = opt.stroke_width / k
         if use:

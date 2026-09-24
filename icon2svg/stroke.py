@@ -13,6 +13,8 @@ from skimage.morphology import skeletonize
 
 from .bezier import unit, arc_to_cubics
 from .tracer import fit_circle
+from .geometry import primitive_closed, primitive_open
+from .regularize import regularize
 from .tracer import extract_contours, fit_path
 
 NB = [(-1, -1), (-1, 0), (-1, 1), (0, -1), (0, 1), (1, -1), (1, 0), (1, 1)]
@@ -202,6 +204,154 @@ def _join_through(nodes, edges, win):
     return edges
 
 
+def _faces(edges, r_up):
+    """Faces of the planar stroke graph. Returns [(edge_ids, polyline(r,c), signed_area)]."""
+    out = {}
+    for i, (a, b, p) in enumerate(edges):
+        if a < 0 or a == b:
+            continue
+        for fwd in (True, False):
+            P = np.asarray(p if fwd else p[::-1], float)
+            node = a if fwd else b
+            d = np.linalg.norm(P - P[0], axis=1)
+            k = np.nonzero(d > 2 * r_up)[0]
+            k = k[0] if len(k) else len(P) - 1
+            v = P[k] - P[0]
+            out.setdefault(node, []).append((np.arctan2(v[0], v[1]), (i, fwd)))
+    for n in out:
+        out[n].sort(key=lambda t: t[0])
+    pos = {he: idx for n, lst in out.items() for idx, (_, he) in enumerate(lst)}
+    seen, faces = set(), []
+    for n, lst in out.items():
+        for _, he in lst:
+            if he in seen:
+                continue
+            face, h = [], he
+            while h not in seen:
+                seen.add(h)
+                face.append(h)
+                i, fwd = h
+                a, b, _ = edges[i]
+                v = b if fwd else a
+                lv = out[v]
+                h = lv[(pos[(i, not fwd)] - 1) % len(lv)][1]
+            # drop dangling edges (walked both ways inside the same face)
+            ids = [i for i, _ in face]
+            face = [h for h in face if ids.count(h[0]) == 1]
+            if len(face) < 1:
+                continue
+            pts = []
+            for i, fwd in face:
+                p = edges[i][2] if fwd else edges[i][2][::-1]
+                pts.extend(p if not pts else p[1:])
+            P = np.asarray(pts, float)
+            area = 0.5 * (np.dot(P[:, 1], np.roll(P[:, 0], -1)) - np.dot(P[:, 0], np.roll(P[:, 1], -1)))
+            faces.append((sorted({i for i, _ in face}), P, area))
+    return faces
+
+
+def _chain_cycle(edges, ids):
+    """Order edges `ids` into one closed polyline (r,c) or None."""
+    ids = list(ids)
+    if not ids:
+        return None
+    first = ids.pop(0)
+    a, b, p = edges[first]
+    pts = list(p)
+    start, cur = a, b
+    while ids:
+        for k, i in enumerate(ids):
+            ea, eb, ep = edges[i]
+            if ea == cur:
+                pts += list(ep[1:]); cur = eb; break
+            if eb == cur:
+                pts += list(ep[::-1][1:]); cur = ea; break
+        else:
+            return None
+        ids.pop(k)
+    if cur != start:
+        return None
+    return np.asarray(pts, float)
+
+
+def _face_primitives(edges, r_up, up, s, w, sopt):
+    import dataclasses
+    """Replace enclosed regions by exact primitives (rect, circle, ellipse,
+    polygon), also trying unions of neighbouring regions (a door inside a
+    wall -> the wall is still one rectangle). Remaining simple regions become
+    one smooth closed path. Returns (shapes, remaining edges)."""
+    shapes = []
+    consumed = set()
+    faces = _faces(edges, r_up)
+    to_pts = lambda P: (P[:, ::-1] + 0.5) / up
+    bounded = []
+    if faces:
+        pos_area = sum(1 for f in faces if f[2] > 0)
+        sign = 1 if pos_area >= len(faces) - pos_area else -1
+        bounded = [f for f in faces if f[2] * sign > 0 and abs(f[2]) >= (1.5 * up * s) ** 2]
+    bounded.sort(key=lambda f: abs(f[2]))
+    matched = [False] * len(bounded)
+    for k, (ids, P, area) in enumerate(bounded):
+        if all(i in consumed for i in ids):
+            continue
+        prim = primitive_closed(to_pts(P), s, w)
+        if prim is not None:
+            shapes.append(prim)
+            consumed |= set(ids)
+            matched[k] = True
+    # unions of two neighbouring regions
+    for k, (ids, P, area) in enumerate(bounded):
+        if matched[k]:
+            continue
+        for j, (ids2, P2, _) in enumerate(bounded):
+            if j == k or not (set(ids) & set(ids2)):
+                continue
+            sym = set(ids) ^ set(ids2)
+            if not sym or sym <= consumed:
+                continue
+            Q = _chain_cycle(edges, sym)
+            if Q is None:
+                continue
+            prim = primitive_closed(to_pts(Q), s, w)
+            if prim is not None and prim[0] != "circle" and len(prim[1][1]) <= 8 \
+                    and any(sg[0] == "L" for sg in prim[1][1]):
+                shapes.append(prim)
+                consumed |= sym
+                matched[k] = True
+                break
+    # simple leftover regions -> one smooth closed path
+    owners = {}
+    for ids, _, _ in bounded:
+        for i in ids:
+            owners[i] = owners.get(i, 0) + 1
+    for k, (ids, P, area) in enumerate(bounded):
+        if matched[k] or all(i in consumed for i in ids):
+            continue
+        if any(owners[i] > 1 and i not in consumed for i in ids):
+            continue
+        ex = dict(sopt.extra)
+        ex["keep_line"] = max(ex.get("keep_line", 2.6), 5.0)
+        smooth = dataclasses.replace(sopt, tolerance=sopt.tolerance * 1.25, min_line=5.0,
+                                     corner_angle=70, extra=ex)
+        shapes.append(fit_path(to_pts(P), True, smooth, s))
+        consumed |= set(ids)
+        matched[k] = True
+    # closed loops without junctions
+    keep = []
+    for i, e in enumerate(edges):
+        if i in consumed:
+            continue
+        if e[0] < 0 or e[0] == e[1]:
+            pts = (np.asarray(e[2], float)[:, ::-1] + 0.5) / up
+            if len(pts) > 8:
+                prim = primitive_closed(pts, s, w)
+                if prim is not None:
+                    shapes.append(prim)
+                    continue
+        keep.append(e)
+    return shapes, keep
+
+
 def deg_of(edges, nid):
     return sum((e[0] == nid) + (e[1] == nid) for e in edges)
 
@@ -236,7 +386,7 @@ def trace_strokes(work, opt, s):
 
     nodes, edges = _graph(sk)
     edges = _prune_and_merge(nodes, edges, spur=1.2 * r_up + 2 * up * s)
-    edges = _join_through(nodes, edges, win=int(r_up * 1.5) + 2)
+    all_edges = list(edges)
 
     # refine the width from anti-aliased coverage: ink area / centre-line length
     total_len = sum(_length(e[2]) for e in edges) / up
@@ -259,6 +409,13 @@ def trace_strokes(work, opt, s):
     extra.setdefault("sharp_r", 0.42 * w / s)
     extra.setdefault("corner_k", max(0.9, 0.55 * w / s))
     sopt = dataclasses.replace(opt, tolerance=opt.tolerance * 1.6, corner_angle=max(opt.corner_angle, 60), extra=extra)
+
+    # ---- designer-style primitives on enclosed regions ----
+    prim_shapes = []
+    if opt.extra.get("primitives", True):
+        prim_shapes, edges = _face_primitives(edges, r_up, up, s, w, sopt)
+    edges = _join_through(nodes, edges, win=int(r_up * 1.5) + 2)
+
     deg = {}
     for a, b, _ in edges:
         if a >= 0:
@@ -299,6 +456,11 @@ def trace_strokes(work, opt, s):
         L = np.linalg.norm(np.diff(pts, axis=0), axis=1).sum()
         if L < 0.6 * s:
             continue
+        if opt.extra.get("primitives", True):
+            prim = primitive_open(pts, s, w)
+            if prim is not None:
+                prim_shapes.append(prim)
+                continue
         if L > 3 * rj:
             if deg.get(a, 0) >= 3:
                 pts = straighten(pts, True)
@@ -307,6 +469,7 @@ def trace_strokes(work, opt, s):
         items.append((False, pts))
 
     shapes, items = _circles(items, s, w, opt)
+    shapes = prim_shapes + shapes
     # re-attach stroke ends to circles they touched before the circle was idealised
     circ = [d for k, d in shapes if k == "circle"]
     for _, pts in items:
@@ -318,6 +481,8 @@ def trace_strokes(work, opt, s):
                     pts[e] = np.array([cx, cy]) + v / dist * r
     for closed, pts in items:
         shapes.append(fit_path(pts, closed, sopt, s))
+    if opt.extra.get("primitives", True):
+        shapes = regularize(shapes, s, w)
     return shapes, fills, w
 
 
