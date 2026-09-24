@@ -7,10 +7,11 @@ if [ ! -x .venv/bin/python ]; then
   echo "First run: setting up (1-2 minutes)..."
   "$PY" -m venv .venv
 fi
-if [ ! -f .venv/installed.ok ]; then
+# (re)install when requirements.txt changed since the last install
+if ! cmp -s requirements.txt .venv/installed.ok; then
   .venv/bin/python -m pip install --upgrade pip
   .venv/bin/python -m pip install -r requirements.txt
-  touch .venv/installed.ok
+  cp requirements.txt .venv/installed.ok
 fi
 if [ "$1" != "" ]; then
   .venv/bin/python convert.py "$@"   # ./run_mac_linux.sh Input/  -> batch convert

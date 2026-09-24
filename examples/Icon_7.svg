@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 130 130">
+<g fill="none" stroke="#000000" stroke-width="2.38" stroke-linecap="round" stroke-linejoin="round">
+  <path d="M 13.34,117.29 l 107.1,0"/>
+  <path d="M 18.38,117.29 l 0,-63"/>
+  <path d="M 13.34,54.29 l 28.35,0"/>
+  <path d="M 115.4,117.29 l 0,-63"/>
+  <path d="M 92.09,54.29 l 28.35,0"/>
+  <path d="M 41.69,117.29 l 0,-85.05 l 50.4,0 l 0,85.05"/>
+  <path d="M 51.14,32.24 l 0,-6.3 l 31.5,0 l 0,6.3"/>
+  <path d="M 66.89,25.94 l 0,-9.45"/>
+  <path d="M 54.29,117.29 l 0,-22.05 l 25.2,0 l 0,22.05 M 66.89,95.24 l 0,22.05"/>
+  <rect x="49.25" y="40.43" width="7.56" height="44.1"/>
+  <rect x="63.11" y="40.43" width="7.56" height="44.1"/>
+  <rect x="76.97" y="40.43" width="7.56" height="44.1"/>
+  <rect x="24.68" y="62.48" width="10.08" height="11.34"/>
+  <rect x="24.68" y="80.75" width="10.08" height="11.34"/>
+  <rect x="24.68" y="99.02" width="10.08" height="11.34"/>
+  <rect x="99.02" y="62.48" width="10.08" height="11.34"/>
+  <rect x="99.02" y="80.75" width="10.08" height="11.34"/>
+  <rect x="99.02" y="99.02" width="10.08" height="11.34"/>
+</g>
+</svg>

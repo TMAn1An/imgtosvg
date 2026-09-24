@@ -4,3 +4,4 @@ __pycache__/
 Output/
 .pytest_cache/
 *.zip
+config.json

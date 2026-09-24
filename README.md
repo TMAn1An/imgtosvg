@@ -62,6 +62,48 @@ python convert.py Input/ --color currentColor    # CSS থেকে রঙ ন�
 | `--no-symmetry` | সিমেট্রিক আইকনকে হুবহু সিমেট্রিক করবে না |
 | `--no-primitives` | জানালা/মাথা ইত্যাদি exact rect/ellipse/polygon দিয়ে রিড্র করবে না (শুধু ট্রেস) |
 
+## ৪) AI Redraw (ডিজাইনার মানের জন্য)
+
+লোকাল ইঞ্জিন গাণিতিকভাবে ট্রেস করে। **AI Redraw** একটা vision AI মডেলকে দিয়ে প্রতিটা আইকন
+ডিজাইনারের মতো নতুন করে আঁকায়: circle, rect, line আর কম anchor-এর path দিয়ে, overlap করা আস্ত শেপে।
+তারপর টুল নিজেই মিলিয়ে দেখে:
+
+1. মডেলকে দেওয়া হয় আইকনের বড় ছবি, `examples/` ফোল্ডারের ২টা স্টাইল উদাহরণ (আপনার রেফারেন্স থেকে বানানো),
+   মাপা stroke width, আর লোকাল ট্রেস (কোন জিনিস কোথায় আছে বোঝার জন্য)
+2. মডেলের SVG রেন্ডার করে ইনপুটের সাথে মেলানো হয় (match %)
+3. না মিললে পার্থক্যের ছবি (লাল = বাদ পড়েছে, নীল = বাড়তি) মডেলকে ফেরত দিয়ে ঠিক করতে বলা হয়
+   (Correction rounds, ডিফল্ট ২ বার)। সবচেয়ে ভালোটা রাখা হয়।
+
+### ফ্রি অপশন
+| প্রোভাইডার | খরচ | কোয়ালিটি | কী লাগবে |
+|---|---|---|---|
+| **Google Gemini (Flash)** | ফ্রি টিয়ার (দিনে সীমিত রিকোয়েস্ট) | ভালো, ফ্রি অপশনের মধ্যে সেরা | <https://aistudio.google.com/apikey> থেকে ফ্রি key |
+| OpenRouter `:free` মডেল | ফ্রি (সীমিত) | মডেলভেদে মাঝারি | <https://openrouter.ai/keys> key + মডেলের নাম |
+| Ollama (লোকাল) | পুরো ফ্রি, অফলাইন | কম (ছোট মডেল SVG আঁকায় দুর্বল) | ভালো GPU, `ollama pull qwen2.5vl:7b` |
+| Gemini Pro / Claude | পেইড | সবচেয়ে ভালো | পেইড key |
+
+প্রতি আইকনে ১ থেকে ৩টা রিকোয়েস্ট লাগে (প্রথম আঁকা + correction)। Gemini ফ্রি টিয়ারে
+Google আপনার ইনপুট তাদের মডেল উন্নত করতে ব্যবহার করতে পারে। গোপন ডিজাইন হলে পেইড টিয়ার ব্যবহার করুন।
+
+### ব্যবহার
+- **ওয়েব অ্যাপে:** `run_windows.bat` চালান, Engine = **AI redraw**, প্রোভাইডার বাছুন, key পেস্ট করে **Save**,
+  **Check** চাপলে key কাজ করছে কিনা আর কোন মডেল পাওয়া যায় দেখাবে। তারপর আইকন ড্রপ করুন।
+- **পুরো ফোল্ডার:** ফোল্ডারটা `ai_redraw_folder_windows.bat`-এর উপর ড্রপ করুন, ফল যাবে `Output_ai` ফোল্ডারে।
+- **কমান্ড লাইন:**
+```bash
+python ai_redraw.py --key YOUR_GEMINI_KEY --save-key --list-models   # key সেভ + মডেল লিস্ট
+python ai_redraw.py Input/                                           # Gemini, auto মডেল
+python ai_redraw.py Input/ --model gemini-2.5-flash --rounds 3
+python ai_redraw.py Input/ --provider openrouter --key KEY --model "qwen/qwen2.5-vl-72b-instruct:free"
+python ai_redraw.py Input/ --provider ollama --model qwen2.5vl:7b
+python ai_redraw.py Input/ --stroke-width 2.4                        # রেফারেন্সের মতো পাতলা লাইন
+```
+
+### নিজের স্টাইল শেখানো
+`examples/` ফোল্ডারে যেকোনো জোড়া রাখুন: `NAME.png` (বা jpg) + `NAME.svg` (যেভাবে চান সেভাবে আঁকা)।
+Illustrator থেকে এক্সপোর্ট করা SVG পরিষ্কার করতে:
+`python tools/make_examples.py ইমেজ_ফোল্ডার svg_ফোল্ডার examples`
+
 ## টিপস
 
 - **আপনার রেফারেন্স SVG-র মতো পাতলা লাইন চাইলে**: রেফারেন্সগুলো 130×130 viewBox-এ মোটামুটি `2.4` stroke-width দিয়ে আঁকা,
@@ -93,6 +135,11 @@ web/index.html              ওয়েব UI
 run_windows.bat             Windows লঞ্চার (প্রথমবার নিজেই সেটআপ করে)
 convert_folder_windows.bat  ফোল্ডার ড্র্যাগ-ড্রপ করে ব্যাচ কনভার্ট
 run_mac_linux.sh            Mac/Linux লঞ্চার
+ai_redraw.py                AI redraw কমান্ড লাইন
+ai_redraw_folder_windows.bat  ফোল্ডার ড্র্যাগ-ড্রপ করে AI redraw
+icon2svg/ai.py              AI প্রোভাইডার, প্রম্পট, রেন্ডার-মিলানো-ঠিক করার লুপ
+examples/                   AI-কে দেখানোর স্টাইল উদাহরণ (আপনার রেফারেন্স থেকে)
+config.json                 সেভ করা API key (git-এ যায় না)
 tools/evaluate.py           ফোল্ডার কনভার্ট করে মান যাচাই (dev)
 tools/debug_view.py         anchor/handle সহ ডিবাগ ছবি (dev)
 tests/                      pytest

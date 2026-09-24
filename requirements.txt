@@ -3,3 +3,5 @@ opencv-python-headless>=4.6
 scikit-image>=0.19
 scipy>=1.8
 flask>=2.2
+resvg-py>=0.2
+svgelements>=1.9

@@ -57,6 +57,74 @@ def convert():
     return jsonify(results)
 
 
+# ------------------------------------------------------------ AI redraw --
+from icon2svg import ai as _ai  # noqa: E402
+
+_providers = {}
+
+
+def _provider(form):
+    cfg = _ai.load_config()
+    name = form.get("provider") or cfg.get("provider") or "gemini"
+    key = form.get("key") or _ai.key_for(name, cfg)
+    model = form.get("model") or "auto"
+    base = form.get("base_url") or None
+    ck = (name, key, model, base)
+    if ck not in _providers:
+        _providers[ck] = _ai.make_provider(name, key, model, base)
+    return _providers[ck]
+
+
+@app.get("/api/ai/config")
+def ai_config():
+    cfg = _ai.load_config()
+    return jsonify({"provider": cfg.get("provider", "gemini"),
+                    "has_key": {k: bool(v) for k, v in (cfg.get("keys") or {}).items()}})
+
+
+@app.post("/api/ai/config")
+def ai_config_save():
+    data = request.get_json(force=True) or {}
+    cfg = _ai.load_config()
+    if data.get("provider"):
+        cfg["provider"] = data["provider"]
+    if data.get("key"):
+        cfg.setdefault("keys", {})[data.get("provider", "gemini")] = data["key"]
+    _ai.save_config(cfg)
+    return jsonify({"ok": True})
+
+
+@app.post("/api/ai/models")
+def ai_models():
+    try:
+        prov = _provider(request.form)
+        return jsonify({"models": prov.list_models(), "auto": prov.resolve_model()})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 400
+
+
+@app.post("/api/ai/convert")
+def ai_convert():
+    f = request.files.get("file")
+    if f is None:
+        return jsonify({"error": "no file"}), 400
+    name = os.path.splitext(os.path.basename(f.filename or "icon"))[0]
+    logs = []
+    try:
+        prov = _provider(request.form)
+        img = cv2.imdecode(np.frombuffer(f.read(), np.uint8), cv2.IMREAD_UNCHANGED)
+        if img is None:
+            raise ValueError("unsupported image")
+        n_ex = int(request.form.get("examples", 2))
+        examples = _ai.load_examples(os.path.join(HERE, "examples"), n_ex) if n_ex > 0 else []
+        sw = float(request.form.get("stroke_width") or 0) or None
+        svg, info = _ai.redraw(img, prov, rounds=int(request.form.get("rounds", 2)), examples=examples,
+                               stroke_width=sw, log=logs.append, n_examples=n_ex)
+        return jsonify({"name": name, "svg": svg, "log": logs, **info})
+    except Exception as e:
+        return jsonify({"name": name, "error": str(e), "log": logs})
+
+
 @app.post("/api/zip")
 def make_zip():
     items = request.get_json(force=True) or []

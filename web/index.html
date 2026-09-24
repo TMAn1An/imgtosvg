@@ -24,7 +24,7 @@
   .side{display:flex;flex-direction:column;gap:14px;align-self:start;position:sticky;top:16px}
   label.f{display:block;font-weight:600;margin-bottom:6px}
   .hint{color:var(--muted);font-size:12px;margin-top:4px}
-  select,input[type=number],input[type=text]{width:100%;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--ink);font:inherit}
+  select,input[type=number],input[type=text],input[type=password]{width:100%;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--ink);font:inherit}
   input[type=range]{width:100%}
   .row{display:flex;gap:8px;align-items:center}
   .seg{display:flex;border:1px solid var(--line);border-radius:8px;overflow:hidden}
@@ -60,6 +60,48 @@
 <main>
   <aside class="side">
     <div class="panel">
+      <label class="f">Engine</label>
+      <div class="seg" id="engine">
+        <button data-v="local" class="on">Local</button>
+        <button data-v="ai">AI redraw</button>
+      </div>
+      <div class="hint">Local = instant, free, offline. AI redraw = a vision AI model redraws every icon like a designer, then it is checked against your image and corrected (about 20–60 s per icon).</div>
+      <div id="aibox" style="display:none;margin-top:14px">
+        <label class="f">AI provider</label>
+        <select id="prov">
+          <option value="gemini">Google Gemini (free tier)</option>
+          <option value="openrouter">OpenRouter (has free models)</option>
+          <option value="ollama">Ollama – local model, offline</option>
+          <option value="anthropic">Anthropic Claude</option>
+        </select>
+        <div class="hint" id="provhint"></div>
+        <div style="height:10px"></div>
+        <label class="f">API key</label>
+        <div class="row">
+          <input type="password" id="key" placeholder="paste your key" style="flex:1">
+          <button class="btn" id="savekey" title="Remember this key on this PC (config.json)">Save</button>
+        </div>
+        <div class="hint" id="keystate"></div>
+        <div style="height:10px"></div>
+        <label class="f">Model</label>
+        <div class="row">
+          <input type="text" id="model" list="models" placeholder="auto" style="flex:1">
+          <button class="btn" id="check">Check</button>
+        </div>
+        <datalist id="models"></datalist>
+        <div class="hint" id="modelhint">auto = newest Flash model your key can use.</div>
+        <div style="height:10px"></div>
+        <div class="row">
+          <div style="flex:1"><label class="f">Correction rounds</label>
+            <select id="rounds"><option>0</option><option>1</option><option selected>2</option><option>3</option><option>4</option></select></div>
+          <div style="flex:1"><label class="f">Style examples</label>
+            <select id="nex"><option>0</option><option>1</option><option selected>2</option><option>3</option></select></div>
+        </div>
+        <div style="height:12px"></div>
+        <button class="btn primary" id="airun" style="width:100%">Redraw all with AI</button>
+      </div>
+    </div>
+    <div class="panel" id="localopts">
       <label class="f">Output style</label>
       <div class="seg" id="mode">
         <button data-v="auto" class="on">Auto</button>
@@ -68,7 +110,7 @@
       </div>
       <div class="hint">Stroke = editable centre-line strokes (like hand-drawn line icons). Outline = filled shapes. Auto picks the best.</div>
     </div>
-    <div class="panel">
+    <div class="panel local-only">
       <label class="f">Smoothness <span id="tolv" class="sub"></span></label>
       <input type="range" id="tol" min="0.15" max="0.9" step="0.05" value="0.3">
       <div class="hint">Right = smoother, fewer anchor points. Left = follows the image more closely.</div>
@@ -121,7 +163,81 @@ const $ = s => document.querySelector(s);
 let files = [];          // File objects
 let results = [];        // server results
 let mode = "auto";
+let engine = "local";
 const urls = new Map();
+
+// ---------------------------------------------------------------- engine --
+const HINTS = {
+  gemini: 'Free key: <a href="https://aistudio.google.com/apikey" target="_blank">aistudio.google.com/apikey</a>. The free tier allows a limited number of requests per day.',
+  openrouter: 'Key: <a href="https://openrouter.ai/keys" target="_blank">openrouter.ai/keys</a>. Models ending in <b>:free</b> cost nothing. Enter the model name.',
+  ollama: 'Runs on your PC, no key needed. Install <a href="https://ollama.com" target="_blank">ollama.com</a>, then e.g. <code>ollama pull qwen2.5vl:7b</code> and enter that model name. Needs a good GPU; quality is lower than Gemini.',
+  anthropic: 'Key: <a href="https://console.anthropic.com" target="_blank">console.anthropic.com</a> (paid).',
+};
+function showEngine() {
+  $("#aibox").style.display = engine === "ai" ? "block" : "none";
+  document.querySelectorAll("#localopts, .local-only").forEach(el => el.style.display = engine === "ai" ? "none" : "");
+  $("#provhint").innerHTML = HINTS[$("#prov").value];
+}
+document.querySelectorAll("#engine button").forEach(b => b.onclick = () => {
+  document.querySelectorAll("#engine button").forEach(x => x.classList.remove("on"));
+  b.classList.add("on"); engine = b.dataset.v;
+  try { localStorage.setItem("engine", engine); } catch (e) {}
+  showEngine();
+  if (engine === "local") reconvert();
+});
+function aiForm() {
+  const fd = new FormData();
+  fd.append("provider", $("#prov").value);
+  if ($("#key").value) fd.append("key", $("#key").value);
+  fd.append("model", $("#model").value || "auto");
+  fd.append("rounds", $("#rounds").value);
+  fd.append("examples", $("#nex").value);
+  fd.append("stroke_width", $("#sw").value || 0);
+  return fd;
+}
+async function refreshKeyState() {
+  try {
+    const c = await (await fetch("/api/ai/config")).json();
+    const has = (c.has_key || {})[$("#prov").value];
+    $("#keystate").textContent = has ? "A saved key is used (leave the field empty)." : ($("#prov").value === "ollama" ? "" : "No saved key yet.");
+  } catch (e) {}
+}
+$("#prov").onchange = () => { showEngine(); refreshKeyState(); $("#model").value = ""; };
+$("#savekey").onclick = async () => {
+  await fetch("/api/ai/config", { method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ provider: $("#prov").value, key: $("#key").value }) });
+  $("#key").value = ""; refreshKeyState();
+};
+$("#check").onclick = async () => {
+  $("#modelhint").innerHTML = '<span class="spin"></span>checking…';
+  try {
+    const r = await (await fetch("/api/ai/models", { method: "POST", body: aiForm() })).json();
+    if (r.error) throw new Error(r.error);
+    $("#models").innerHTML = r.models.map(m => `<option value="${m}">`).join("");
+    $("#modelhint").textContent = `Key works. ${r.models.length} models; auto = ${r.auto}`;
+  } catch (e) { $("#modelhint").textContent = "Error: " + e.message; }
+};
+$("#airun").onclick = () => aiConvert(files.map((f, k) => k));
+
+async function aiConvert(indices) {
+  if (!indices.length) return;
+  $("#airun").disabled = true;
+  let done = 0;
+  for (const k of indices) {
+    $("#stats").innerHTML = `<span class="spin"></span>AI redraw ${done + 1} / ${indices.length}: ${files[k].name}`;
+    const fd = aiForm();
+    fd.append("file", files[k]);
+    let r;
+    try { r = await (await fetch("/api/ai/convert", { method: "POST", body: fd })).json(); }
+    catch (e) { r = { name: files[k].name, error: String(e) }; }
+    results[k] = r;
+    done++;
+    render();
+  }
+  $("#airun").disabled = false;
+}
+try { if (localStorage.getItem("engine") === "ai") document.querySelector('#engine button[data-v="ai"]').click(); } catch (e) {}
+showEngine(); refreshKeyState();
 
 document.querySelectorAll("#mode button").forEach(b => b.onclick = () => {
   document.querySelectorAll("#mode button").forEach(x => x.classList.remove("on"));
@@ -145,13 +261,17 @@ drop.ondrop = e => { e.preventDefault(); drop.classList.remove("over"); add([...
 function add(list) {
   list = list.filter(f => /^image\//.test(f.type) || /\.(jpe?g|png|bmp|webp|tiff?)$/i.test(f.name));
   if (!list.length) return;
+  const first = files.length;
   files = files.concat(list);
-  reconvert();
+  if (engine === "ai") {
+    results.length = files.length;
+    aiConvert(list.map((f, i) => first + i));
+  } else reconvert();
 }
 
 let busy = 0;
 async function reconvert() {
-  if (!files.length) return;
+  if (!files.length || engine === "ai") return;
   const my = ++busy;
   $("#stats").innerHTML = '<span class="spin"></span>Converting ' + files.length + " icon(s)…";
   const fd = new FormData();
@@ -186,9 +306,25 @@ function wire(svgText) {
   const vb = svg.getAttribute("viewBox").split(/\s+/).map(Number);
   const u = Math.max(vb[2], vb[3]) / 130;
   let out = "";
+  const dotp = (px, py) => out += `<circle cx="${px}" cy="${py}" r="${1.1 * u}" fill="#e5484d"/>`;
+  const thin = (el) => { const c = el.cloneNode(); c.setAttribute("fill", "none"); c.setAttribute("stroke", "#9aa1a9");
+    c.setAttribute("stroke-width", 0.5 * u); out += new XMLSerializer().serializeToString(c).replace(/ xmlns="[^"]*"/, ""); };
+  const n = (el, a) => parseFloat(el.getAttribute(a) || 0);
+  svg.querySelectorAll("circle,ellipse").forEach(el => { thin(el);
+    const cx = n(el, "cx"), cy = n(el, "cy"), rx = n(el, "rx") || n(el, "r"), ry = n(el, "ry") || n(el, "r");
+    dotp(cx + rx, cy); dotp(cx - rx, cy); dotp(cx, cy + ry); dotp(cx, cy - ry); });
+  svg.querySelectorAll("rect").forEach(el => { thin(el);
+    const x = n(el, "x"), y = n(el, "y"), w = n(el, "width"), h = n(el, "height"), r = n(el, "rx");
+    for (const [px, py] of [[x, y], [x + w, y], [x + w, y + h], [x, y + h]]) {
+      if (r > 0) { dotp(px + (px === x ? r : -r), py); dotp(px, py + (py === y ? r : -r)); } else dotp(px, py); } });
+  svg.querySelectorAll("line").forEach(el => { thin(el); dotp(n(el, "x1"), n(el, "y1")); dotp(n(el, "x2"), n(el, "y2")); });
+  svg.querySelectorAll("polyline,polygon").forEach(el => { thin(el);
+    const v = (el.getAttribute("points") || "").trim().split(/[\s,]+/).map(Number);
+    for (let i = 0; i + 1 < v.length; i += 2) dotp(v[i], v[i + 1]); });
   svg.querySelectorAll("path").forEach(p => {
     const d = p.getAttribute("d");
     out += `<path d="${d}" fill="none" stroke="#9aa1a9" stroke-width="${0.5 * u}"/>`;
+    if (!d) return;
     const toks = d.match(/[a-zA-Z]|-?\d*\.?\d+(?:e-?\d+)?/g) || [];
     let i = 0, cmd = "", x = 0, y = 0, sx = 0, sy = 0;
     const num = () => parseFloat(toks[i++]);
@@ -217,6 +353,7 @@ function render() {
   let total = 0, ok = 0;
   grid.innerHTML = "";
   results.forEach((r, k) => {
+    if (!r) return;
     const card = document.createElement("div");
     card.className = "card";
     if (r.error) {
@@ -232,7 +369,7 @@ function render() {
         <div class="meta">
           <div style="min-width:0">
             <div class="name">${r.name}.svg</div>
-            <div class="sub">${r.mode} · ${r.anchors} anchors${r.stroke_width ? " · stroke " + r.stroke_width : ""}</div>
+            <div class="sub">${r.mode === "ai" ? "AI · " + r.model + " · match " + Math.round(r.score * 100) + "%" : r.mode} · ${r.anchors} anchors${r.stroke_width ? " · stroke " + r.stroke_width : ""}</div>
           </div>
           <button class="btn">Download</button>
         </div>`;

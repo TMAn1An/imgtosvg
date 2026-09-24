@@ -17,10 +17,12 @@ if not exist ".venv\Scripts\python.exe" (
   echo  Prothom bar setup hocche, 1-2 minute lagbe...
   python -m venv .venv
 )
-if not exist ".venv\installed.ok" (
+rem (re)install when requirements.txt changed since the last install
+fc /b requirements.txt ".venv\installed.ok" >nul 2>nul
+if errorlevel 1 (
   ".venv\Scripts\python.exe" -m pip install --upgrade pip
   ".venv\Scripts\python.exe" -m pip install -r requirements.txt || (pause & exit /b 1)
-  echo ok> ".venv\installed.ok"
+  copy /y requirements.txt ".venv\installed.ok" >nul
 )
 
 ".venv\Scripts\python.exe" app.py
