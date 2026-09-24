@@ -151,16 +151,19 @@ def _step(shapes, ink, w, lam, n_per):
             if tp == "L":
                 # keep horizontal / vertical lines exactly so
                 for ax in (0, 1):
-                    if abs(c[1][ax] - c[0][ax]) < 1e-6 and i0 != i1:
+                    if abs(c[1][ax] - c[0][ax]) < 1e-2 and i0 != i1:
                         row = np.zeros(nvar)
-                        row[2 * i0 + ax], row[2 * i1 + ax] = 10.0, -10.0
+                        row[2 * i0 + ax], row[2 * i1 + ax] = 1e3, -1e3
                         add(row, 0.0)
     if not rows:
         return shapes, 0
     A = np.vstack(rows + [np.sqrt(lam) * np.eye(nvar)])
     b = np.r_[np.array(rhs), np.zeros(nvar)]
     x = np.linalg.lstsq(A, b, rcond=None)[0]
-    x = np.clip(x, -0.35 * w, 0.35 * w)  # damped: never jump across a line
+    # damped (never jump across a line); one common factor keeps the constraints
+    big = np.abs(x).max() if len(x) else 0.0
+    if big > 0.35 * w:
+        x *= 0.35 * w / big
 
     def mv(p):
         i = anchors[key(p)]
