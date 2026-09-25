@@ -737,7 +737,49 @@ def trace_strokes(work, opt, s):
         shapes = refine_shapes(shapes, work, w)
         if opt.extra.get("primitives", True):
             shapes = regularize(shapes, s, w)
+    if opt.extra.get("tidy", True):
+        # one anchor where two sit almost on top of each other, fewer smooth anchors
+        from .tidy import tidy
+        shapes = tidy(shapes, w, opt.extra.get("tidy_chord", 1.0), opt.extra.get("tidy_tol", 0.12))
+        if opt.extra.get("refine", True):
+            from .refine import refine_shapes
+            shapes = refine_shapes(shapes, work, w)
+        if opt.extra.get("primitives", True):
+            shapes = regularize(shapes, s, w)
+    if opt.extra.get("fill_solid", True):
+        fills = fills + _solid_patches(shapes, work, w, opt, s)
     return shapes, fills, w
+
+
+def _solid_patches(shapes, work, w, opt, s, z=4):
+    """Render -> compare -> fix for solid parts: ink the strokes do not cover
+    and that is a real blob (a solid tie, a compass needle), not a thin fringe
+    along a line, becomes a filled shape."""
+    from .tracer import _render_shapes
+    H, W = work.shape
+    ref = cv2.resize(work, (W * z, H * z), interpolation=cv2.INTER_CUBIC) > 0.5
+    got = _render_shapes(shapes, (H, W), z, w) > 0
+    got = cv2.dilate(got.astype(np.uint8), np.ones((3, 3), np.uint8)) > 0
+    miss = (ref & ~got).astype(np.uint8)
+    r = max(1, int(round(0.25 * w * z)))
+    ker = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * r + 1, 2 * r + 1))
+    core = cv2.morphologyEx(miss, cv2.MORPH_OPEN, ker)
+    n, lab, stats, _ = cv2.connectedComponentsWithStats(core, connectivity=8)
+    out = []
+    for k in range(1, n):
+        if stats[k, cv2.CC_STAT_AREA] < 0.8 * (w * z) ** 2:
+            continue
+        # grow the blob back to the ink edge (under the strokes around it)
+        g = max(1, int(round(0.6 * w * z)))
+        gk = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * g + 1, 2 * g + 1))
+        region = (cv2.dilate((lab == k).astype(np.uint8), gk) > 0) & ref
+        small = cv2.resize(region.astype(np.float32), (W, H), interpolation=cv2.INTER_AREA)
+        for c in extract_contours(small, opt, s):
+            try:
+                out.append(fit_path(c, True, opt, s))
+            except Exception:
+                continue
+    return out
 
 
 def _circles(items, s, w, opt):
