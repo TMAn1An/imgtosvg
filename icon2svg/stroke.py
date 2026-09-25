@@ -741,11 +741,21 @@ def trace_strokes(work, opt, s):
         # one anchor where two sit almost on top of each other, fewer smooth anchors
         from .tidy import tidy
         shapes = tidy(shapes, w, opt.extra.get("tidy_chord", 1.0), opt.extra.get("tidy_tol", 0.12))
+        if opt.extra.get("corners", True):
+            # sharp or rounded, and how round: decided by comparing with the ink
+            from .corners import merge_double_lines, optimize_corners, straighten_curves
+            shapes = straighten_curves(shapes, work, w)
+            shapes = optimize_corners(shapes, work, w)
+            shapes = merge_double_lines(shapes, w)
         if opt.extra.get("refine", True):
             from .refine import refine_shapes
             shapes = refine_shapes(shapes, work, w)
         if opt.extra.get("primitives", True):
             shapes = regularize(shapes, s, w)
+    if opt.extra.get("repeat", True) and opt.extra.get("primitives", True):
+        # identical parts drawn once and copied
+        from .repeat import unify_repeats
+        shapes = regularize(unify_repeats(shapes, work, w), s, w)
     if opt.extra.get("fill_solid", True) and opt.mode in ("stroke", "designer"):
         fills = fills + _solid_patches(shapes, work, w, opt, s)
     return shapes, fills, w
