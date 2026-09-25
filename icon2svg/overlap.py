@@ -247,7 +247,7 @@ def remove_overlaps(shapes, work, w):
         on_other = tree.query(P)[0] < 0.6 * w if tree is not None else np.zeros(len(P), bool)
         ink = map_coordinates(work, [P[:, 1] - 0.5, P[:, 0] - 0.5], order=1, mode="constant") < 0.3
         closed = sh[0] == "path"
-        new = _cut_shape(sh, on_other | ink, S, pieces, closed, min_mid=1.5 * w, min_end=0.3 * w, w=w)
+        new = _cut_shape(sh, on_other | ink, S, pieces, closed, min_mid=1.5 * w, min_end=1.2 * w, w=w)
         if new is None:
             # nothing to cut: a free end still snaps onto the line it meets
             if cur[0][0] != "circle" and sh[0] == "open" and tree is not None:
