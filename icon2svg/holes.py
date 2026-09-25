@@ -87,6 +87,12 @@ def repair_holes(shapes, work, w, s, smooth_opt=None, max_frac=0.25):
             except Exception:
                 prim = None
         if prim is not None:
+            # sit it exactly on the ink centre before judging it
+            from .refine import refine_shapes
+            try:
+                prim = refine_shapes([prim], work, w)[0]
+            except Exception:
+                pass
             prims.append(prim)
     if not prims:
         return shapes
@@ -113,7 +119,7 @@ def repair_holes(shapes, work, w, s, smooth_opt=None, max_frac=0.25):
     return shapes
 
 
-def _offset_polygon(mask, w, max_vertices=4):
+def _offset_polygon(mask, w, max_vertices=8):
     """A small polygonal hole (a triangle): its polygon pushed out by half a
     line width, corners kept sharp (miter)."""
     from .bezier import intersect

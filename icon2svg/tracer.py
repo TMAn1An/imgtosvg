@@ -263,17 +263,26 @@ def find_lines(S, ds, opt, s):
     lines = []
     tol = opt.line_tolerance * s
 
-    def split(a, b):
-        """Douglas-Peucker style split of a flat run into truly straight parts."""
-        if b - a + 1 < minlen:
-            return []
-        c, d, dev = line_fit(S[a:b + 1])
-        if dev <= tol:
-            return [(a, b)]
-        nrm = np.array([-d[1], d[0]])
-        k = a + int(np.argmax(np.abs((S[a:b + 1] - c) @ nrm)))
-        k = min(max(k, a + 1), b - 1)
-        return split(a, k) + split(k, b)
+    def split(a0, b0):
+        """Douglas-Peucker style split of a flat run into truly straight parts
+        (iterative: long smooth arcs would otherwise recurse too deep)."""
+        out, stack = [], [(a0, b0)]
+        while stack:
+            a, b = stack.pop()
+            if b - a + 1 < minlen:
+                continue
+            c, d, dev = line_fit(S[a:b + 1])
+            if dev <= tol:
+                out.append((a, b))
+                continue
+            nrm = np.array([-d[1], d[0]])
+            k = a + int(np.argmax(np.abs((S[a:b + 1] - c) @ nrm)))
+            if k - a < minlen // 2 or b - k < minlen // 2:
+                k = (a + b) // 2      # worst point at an end (an arc): halve
+            k = min(max(k, a + 1), b - 1)
+            stack.append((k, b))
+            stack.append((a, k))
+        return out
 
     cand = []
     for a, b in runs:
@@ -626,7 +635,17 @@ def trace(img, opt=None, return_shapes=False):
     oopt = dataclasses.replace(opt, corner_angle=max(opt.corner_angle, 55), min_line=max(opt.min_line, 3.0),
                                tolerance=opt.tolerance * 1.33, extra=ex)
     shapes = []
-    for c in extract_contours(work, opt, s):
+    src = work
+    if opt.extra.get("retrace", True):
+        # render -> retrace: for a line icon, draw the clean stroke geometry
+        # (uniform width, exact shapes) at high resolution and trace the
+        # outline of that perfect image instead of the noisy input
+        clean = _clean_line_raster(work, opt, s)
+        if clean is not None:
+            src = clean
+            # the clean image has no noise: only truly straight edges are lines
+            oopt = dataclasses.replace(oopt, line_tolerance=opt.line_tolerance * 0.35)
+    for c in extract_contours(src, opt, s):
         try:
             shapes.append(fit_path(c, True, oopt, s))
         except Exception:  # never lose a shape: fall back to a polygon
@@ -638,6 +657,30 @@ def trace(img, opt=None, return_shapes=False):
     if return_shapes:
         return svg, info, [(kd, _scale_shape(kd, dt, k)) for kd, dt in shapes]
     return svg, info
+
+
+def _clean_line_raster(work, opt, s):
+    """Ink map (same size as work) of the stroke engine's clean result, or
+    None when the icon is not a line icon the stroke engine reproduces well."""
+    import dataclasses
+    try:
+        from .stroke import trace_strokes
+        from .ai import render_svg
+        sopt = dataclasses.replace(opt, mode="stroke")
+        strokes, fills, sw = trace_strokes(work, sopt, s)
+        if not strokes or _stroke_fidelity(work, strokes, fills, sw) < 0.88:
+            return None
+        H, W = work.shape
+        body = (f'<path fill="none" stroke="#000" stroke-width="{sw:.4f}" stroke-linecap="round" '
+                f'stroke-linejoin="round" d="{shapes_to_d(strokes, 4)}"/>')
+        if fills:
+            body += f'<path fill="#000" fill-rule="evenodd" d="{shapes_to_d(fills, 4)}"/>'
+        svg = f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {W} {H}">{body}</svg>'
+        u = 4
+        big = 1.0 - render_svg(svg, W * u, H * u)
+        return cv2.resize(big.astype(np.float32), (W, H), interpolation=cv2.INTER_AREA)
+    except Exception:
+        return None
 
 
 def _render_shapes(shape_list, size, z, stroke_w=None):
