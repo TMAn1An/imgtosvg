@@ -1,0 +1,14 @@
+qwen2.5vl:7b {"icon": "Icon_16.jpg", "guide_raw": 0.269, "guide_snap": 0.338, "guide_shapes": 16, "guide_s": 200.1, "redraw_error": "The model did not produce a usable SVG", "redraw_s": 517.6}
+qwen2.5vl:7b {"icon": "Icon_5.jpg", "guide_raw": 0.406, "guide_snap": 0.451, "guide_shapes": 12, "guide_s": 178.4, "redraw": 1.0, "redraw_s": 352.3}
+qwen2.5vl:7b {"icon": "Icon_7.jpg", "guide_raw": 0.565, "guide_snap": 0.58, "guide_shapes": 7, "guide_s": 139.9, "redraw": 0.625, "redraw_s": 250.5}
+qwen2.5vl:3b {"icon": "Icon_16.jpg", "guide_raw": 0.239, "guide_snap": 0.266, "guide_shapes": 7, "guide_s": 94.5, "redraw_error": "The model did not produce a usable SVG", "redraw_s": 290.0}
+qwen2.5vl:3b {"icon": "Icon_5.jpg", "guide_error": "Expecting ',' delimiter: line 93 column 55 (char 5161)", "guide_s": 368.2, "redraw_error": "The model did not produce a usable SVG", "redraw_s": 268.0}
+qwen2.5vl:3b {"icon": "Icon_7.jpg", "guide_raw": 0.565, "guide_snap": 0.58, "guide_shapes": 7, "guide_s": 86.3, "redraw_error": "The model did not produce a usable SVG", "redraw_s": 287.1}
+gemma3:4b {"icon": "Icon_16.jpg", "guide_raw": 0.16, "guide_snap": 0.154, "guide_shapes": 4, "guide_s": 214.3, "redraw": 0.289, "redraw_s": 242.1}
+gemma3:4b {"icon": "Icon_5.jpg", "guide_raw": 0.35, "guide_snap": 0.374, "guide_shapes": 5, "guide_s": 218.7, "redraw": 0.287, "redraw_s": 348.2}
+gemma3:4b {"icon": "Icon_7.jpg", "guide_raw": 0.244, "guide_snap": 0.259, "guide_shapes": 6, "guide_s": 237.2, "redraw": 0.566, "redraw_s": 246.3}
+
+model               guide  snapped  redraw   s/guide  s/redraw
+qwen2.5vl:7b        0.413    0.456   0.542     172.8     373.5
+qwen2.5vl:3b        0.268    0.282   0.000     183.0     281.7
+gemma3:4b           0.251    0.262   0.381     223.4     278.9
