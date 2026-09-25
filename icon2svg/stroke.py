@@ -746,7 +746,7 @@ def trace_strokes(work, opt, s):
             shapes = refine_shapes(shapes, work, w)
         if opt.extra.get("primitives", True):
             shapes = regularize(shapes, s, w)
-    if opt.extra.get("fill_solid", True):
+    if opt.extra.get("fill_solid", True) and opt.mode in ("stroke", "designer"):
         fills = fills + _solid_patches(shapes, work, w, opt, s)
     return shapes, fills, w
 
