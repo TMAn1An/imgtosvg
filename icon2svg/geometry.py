@@ -517,6 +517,119 @@ def teardrop_shape(C, r, T):
     return ("path", (T.copy(), segs))
 
 
+def teardrop_simple(C, r, T):
+    """The same pin drawn like a designer does: 3 anchors (tip, and where the
+    round head meets the two sides), the head as one smooth curve."""
+    from .bezier import fit_single
+    v = T - C
+    d = np.linalg.norm(v)
+    phi = np.arctan2(v[1], v[0])
+    a = np.arccos(np.clip(r / d, -1, 1))
+    t1, t2 = phi + a, phi - a + 2 * np.pi
+    P1 = C + r * np.array([np.cos(t1), np.sin(t1)])
+    P2 = C + r * np.array([np.cos(t2), np.sin(t2)])
+    tt = np.linspace(t1, t2, 60)
+    arc = C + r * np.c_[np.cos(tt), np.sin(tt)]
+    d1 = np.array([-np.sin(t1), np.cos(t1)])          # direction of travel at P1
+    d2 = -np.array([-np.sin(t2), np.cos(t2)])         # pointing back at P2
+    c, _ = fit_single(arc, P1, P2, d1, d2)
+    segs = [("L", P1), ("C", c[1], c[2], P2), ("L", T.copy())]
+    return ("path", (T.copy(), segs))
+
+
+def pin_shape(C, r, u, dtip, h_side, h_tip, beta):
+    """Symmetric 3-anchor map pin: anchors left/right at the widest point of
+    the round head, and the tip.  u: unit axis from the head centre to the
+    tip; beta: half angle of the tip; h_side/h_tip: handle lengths of the
+    sides at the head and at the tip."""
+    n = np.array([-u[1], u[0]])
+    L, R = C + r * n, C - r * n
+    T = C + dtip * u
+    k = 4 / 3 * r                                    # half circle over the head
+    dR = np.cos(beta) * u + np.sin(beta) * n         # arriving at the tip from R's side
+    dL = np.cos(beta) * u - np.sin(beta) * n         # arriving at the tip from L's side
+    segs = [("C", L - u * k, R - u * k, R),
+            ("C", R + u * h_side, T - dR * h_tip, T),
+            ("C", T - dL * h_tip, L + u * h_side, L)]
+    return ("path", (L.copy(), segs))
+
+
+def fit_pin(P, s, w):
+    """Map pin (round head, curved sides, one sharp tip) with 3 anchors,
+    fitted by least squares.  Returns (shape, rms) or None."""
+    from scipy.optimize import least_squares
+    from scipy.spatial import cKDTree
+    from .bezier import bez
+    if len(P) < 20:
+        return None
+    # initial guess: head circle from the round end, tip = farthest point
+    best0 = None
+    x0, y0 = P.min(0)
+    x1, y1 = P.max(0)
+    Wd, Hd = x1 - x0, y1 - y0
+    for sel in (P[:, 1] < y0 + 0.8 * Wd, P[:, 1] > y1 - 0.8 * Wd, P[:, 0] < x0 + 0.8 * Hd, P[:, 0] > x1 - 0.8 * Hd):
+        if sel.sum() < 12:
+            continue
+        C, r = _circle_ls(P[sel])
+        dist = np.linalg.norm(P - C, axis=1)
+        T = P[int(np.argmax(dist))]
+        d = dist.max()
+        if r < 2 * s or not (1.3 * r < d < 3.5 * r):
+            continue
+        dev = np.abs(np.linalg.norm(P[sel] - C, axis=1) - r).mean()
+        if best0 is None or dev < best0[0]:
+            best0 = (dev, C, r, T, d)
+    if best0 is None:
+        return None
+    _, C, r, T, d = best0
+    # a pin has a real sharp tip: the outline turns hard at the far end
+    k = int(np.argmax(np.linalg.norm(P - C, axis=1)))
+    seg = np.linalg.norm(np.diff(P, axis=0), axis=1)
+    step = max(1, int(round(3.0 * w / max(np.median(seg), 1e-6))))
+    a_, b_ = P[(k - step) % len(P)] - P[k], P[(k + step) % len(P)] - P[k]
+    ang_tip = np.degrees(np.arccos(np.clip(a_ @ b_ / (np.linalg.norm(a_) * np.linalg.norm(b_) + 1e-9), -1, 1)))
+    if ang_tip > 115:
+        return None
+    u0 = (T - C) / d
+    if u0[1] < np.cos(np.radians(25)):
+        return None   # map pins stand upright with the tip at the bottom
+    ang0 = np.arctan2(u0[1], u0[0])
+    tree = cKDTree(P)
+    t = np.linspace(0, 1, 25)
+
+    def model(q):
+        cx, cy, rr, ang, dt, hs, ht, be = q
+        u = np.array([np.cos(ang), np.sin(ang)])
+        sh = pin_shape(np.array([cx, cy]), rr, u, dt, hs, ht, be)
+        start, segs = sh[1]
+        pts, cur = [], start
+        for sg in segs:
+            pts.append(bez(np.array([cur, sg[1], sg[2], sg[3]]), t))
+            cur = sg[3]
+        return sh, np.vstack(pts)
+
+    def resid(q):
+        _, M = model(q)
+        d1 = cKDTree(M).query(P)[0]
+        d2 = tree.query(M)[0]
+        return np.r_[d1, 0.5 * d2]
+
+    q0 = [C[0], C[1], r, ang0, d, 0.5 * (d - r), 0.3 * (d - r), np.radians(35)]
+    lo = [C[0] - r, C[1] - r, 0.6 * r, ang0 - 0.5, 1.1 * r, 0.05 * r, 0.05 * r, np.radians(5)]
+    hi = [C[0] + r, C[1] + r, 1.5 * r, ang0 + 0.5, 4.0 * r, 3.0 * r, 3.0 * r, np.radians(80)]
+    try:
+        res = least_squares(resid, q0, bounds=(lo, hi), diff_step=1e-3, max_nfev=80)
+    except Exception:
+        return None
+    sh, M = model(res.x)
+    d1 = cKDTree(M).query(P)[0]
+    d2 = tree.query(M)[0]
+    rms = float(np.sqrt(np.mean(d1 ** 2)))
+    if rms < 0.25 * w + 0.2 * s and d1.max() < 0.7 * w + 0.5 * s and d2.max() < 0.8 * w + 0.5 * s:
+        return sh, rms
+    return None
+
+
 def fit_teardrop(P, s, w):
     best = None
     x0, y0 = P.min(0)
@@ -552,5 +665,9 @@ def fit_teardrop(P, s, w):
         rms = np.sqrt(np.mean(dev ** 2))
         if rms < 0.3 * s + 0.07 * w and dev2.max() < 0.9 * s + 0.2 * w:
             if best is None or rms < best[0]:
-                best = (rms, shape)
+                # the 3-anchor designer pin, unless one curve over the head
+                # cannot follow it (a very wide round part)
+                simple = teardrop_simple(C, r, T)
+                ok = _nearest_dist(P[far_P], shape_points(simple)).max() < dev.max() + 0.25 * w
+                best = (rms, simple if ok else shape)
     return None if best is None else (best[1], best[0])

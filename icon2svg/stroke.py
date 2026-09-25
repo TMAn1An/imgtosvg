@@ -13,7 +13,7 @@ from skimage.morphology import skeletonize
 
 from .bezier import unit, arc_to_cubics
 from .tracer import fit_circle
-from .geometry import primitive_closed, primitive_open, fit_circle_ellipse
+from .geometry import primitive_closed, primitive_open, fit_circle_ellipse, _err
 from .regularize import regularize
 from .symfit import fit_symmetric_closed
 from .tracer import extract_contours, fit_path
@@ -275,6 +275,137 @@ def _chain_cycle(edges, ids):
     return np.asarray(pts, float)
 
 
+def _simple_cycles(edges, max_len=8, max_cycles=3000, max_extent=1e9):
+    """Simple cycles of the stroke graph (as lists of edge ids), each once."""
+    adj = {}
+    box = {}
+    for i, (a, b, p) in enumerate(edges):
+        if a < 0 or a == b:
+            continue
+        adj.setdefault(a, []).append((i, b))
+        adj.setdefault(b, []).append((i, a))
+        P = np.asarray(p, float)
+        box[i] = (P.min(0), P.max(0))
+    seen, out = set(), []
+
+    def dfs(s0, node, path, visited, lo, hi):
+        if len(out) >= max_cycles:
+            return
+        for i, nb in adj[node]:
+            if path and i == path[-1]:
+                continue
+            nlo, nhi = np.minimum(lo, box[i][0]), np.maximum(hi, box[i][1])
+            if (nhi - nlo).max() > max_extent:
+                continue
+            if nb == s0:
+                key = frozenset(path + [i])
+                if len(key) == len(path) + 1 and key not in seen:
+                    seen.add(key)
+                    out.append(path + [i])
+                continue
+            if nb < s0 or nb in visited or len(path) + 1 >= max_len:
+                continue
+            dfs(s0, nb, path + [i], visited | {nb}, nlo, nhi)
+
+    for s0 in sorted(adj):
+        dfs(s0, s0, [], {s0}, np.array([np.inf, np.inf]), np.array([-np.inf, -np.inf]))
+    return out
+
+
+def _cycle_primitives(edges, up, s, w, extent, work=None):
+    """Whole round shapes (circle, ellipse, map pin) that other strokes cross
+    or touch: found as cycles of the graph, not as the regions the crossings
+    cut them into.  A shape owns only the edges that lie on it (a pin tip
+    that dips into its base ellipse belongs to the pin, the ellipse just runs
+    over it), and every edge has at most one owner, so nothing is drawn twice.
+    Returns (shapes, consumed edge ids)."""
+    from scipy.spatial import cKDTree
+    from .geometry import fit_pin, shape_points
+    to_pts = lambda P: (P[:, ::-1] + 0.5) / up
+    epts = {i: to_pts(np.asarray(p, float)) for i, (a, b, p) in enumerate(edges)}
+    cands = []
+    for ids in _simple_cycles(edges, max_extent=extent * up):
+        Q = _chain_cycle(edges, ids)
+        if Q is None or len(Q) < 12:
+            continue
+        pts = to_pts(Q)
+        hull = cv2.convexHull(pts.astype(np.float32))
+        area = abs(cv2.contourArea(pts.astype(np.float32)))
+        convex = area >= 0.85 * cv2.contourArea(hull)
+        if area < (2 * w) ** 2 or area < 0.6 * cv2.contourArea(hull):
+            continue     # round shapes are (almost) convex
+        fits = []
+        e = fit_circle_ellipse(pts, s, w, robust=True, min_cover=0.9) if convex else None
+        if e is not None:
+            fits.append(e)
+        elif convex:
+            pn = fit_pin(pts, s, w)
+            if pn is not None:
+                fits.append(pn)
+        if not fits and len(ids) >= 3:
+            # an ellipse with a deep dent: another shape's tip reaching into it
+            # (a pin resting on its base).  Fit without the dent edge; the dent
+            # must lie inside the ellipse.
+            for k in ids:
+                rest = np.vstack([epts[i] for i in ids if i != k])
+                e = fit_circle_ellipse(rest, s, w, robust=False, min_cover=0.75)
+                if e is None:
+                    continue
+                cx, cy, rx, ry = (e[0][1][0], e[0][1][1], e[0][1][2], e[0][1][2]) if e[0][0] == "circle" else \
+                    (*(shape_points(e[0], 8).mean(0)), np.ptp(shape_points(e[0], 8)[:, 0]) / 2, np.ptp(shape_points(e[0], 8)[:, 1]) / 2)
+                D = epts[k]
+                inside = ((D[:, 0] - cx) / rx) ** 2 + ((D[:, 1] - cy) / ry) ** 2
+                if inside.max() < 1.15 and inside.min() < 0.8:
+                    fits.append(e)
+                    break
+        if not fits:
+            continue
+        shape, rms = min(fits, key=lambda f: f[1])
+        if work is not None:
+            # the whole outline must lie on ink (a false ellipse around a
+            # group of fingers crosses the white gaps between them)
+            from scipy.ndimage import map_coordinates
+            O = shape_points(shape, 30)
+            v = map_coordinates(work, [O[:, 1] - 0.5, O[:, 0] - 0.5], order=1, mode="constant")
+            if (v > 0.35).mean() < 0.88:
+                continue
+        # a whole shape has no strokes running from its outline into it (the
+        # outline of a group of fingers does: the gaps between the fingers)
+        O = shape_points(shape, 30).astype(np.float32)
+        inner = False
+        nodes_c = {edges[i][0] for i in ids} | {edges[i][1] for i in ids}
+        for j, (a2, b2, p2) in enumerate(edges):
+            if j in ids or not ({a2, b2} & nodes_c):
+                continue
+            E = epts[j][::max(1, len(epts[j]) // 12)]
+            ins = [cv2.pointPolygonTest(O, (float(x), float(y)), True) > 0.6 * w for x, y in E]
+            if np.mean(ins) > 0.5:
+                inner = True
+                break
+        if inner:
+            continue
+        # a rounded rectangle / polygon that fits better is not a round shape
+        alt = primitive_closed(pts, s, w)
+        if alt is not None and alt[0] == "path" and _err(pts, alt) < 0.8 * _err(pts, shape):
+            continue
+        tree = cKDTree(shape_points(shape, 40))
+        own = []
+        for i in ids:
+            dd = tree.query(epts[i])[0]
+            if (dd < 0.4 * w).mean() >= 0.9 and dd.max() < 0.7 * w:
+                own.append(i)
+        if len(own) >= 2 or (len(own) == 1 and len(ids) == 1):
+            cands.append((own, shape, rms, area))
+    cands.sort(key=lambda c: (-len(c[0]), -c[3], c[2]))
+    used, shapes = set(), []
+    for own, shape, rms, area in cands:
+        if used & set(own):
+            continue
+        shapes.append(shape)
+        used |= set(own)
+    return shapes, used
+
+
 def _face_primitives(edges, r_up, up, s, w, sopt):
     import dataclasses
     """Replace enclosed regions by exact primitives (rect, circle, ellipse,
@@ -283,6 +414,9 @@ def _face_primitives(edges, r_up, up, s, w, sopt):
     one smooth closed path. Returns (shapes, remaining edges)."""
     shapes = []
     consumed = set()
+    if sopt.extra.get("cycles", True):
+        H = max(max(np.asarray(p, float).max(0)) for _, _, p in edges) / up if edges else 0
+        shapes, consumed = _cycle_primitives(edges, up, s, w, extent=0.7 * H, work=sopt.extra.get("_work"))
     faces = _faces(edges, r_up)
     to_pts = lambda P: (P[:, ::-1] + 0.5) / up
     bounded = []
@@ -621,6 +755,7 @@ def trace_strokes(work, opt, s):
     extra.setdefault("keep_line", max(2.6, 1.5 * w / s))
     extra.setdefault("sharp_r", 0.42 * w / s)
     extra.setdefault("corner_k", max(0.9, 0.55 * w / s))
+    extra["_work"] = work
     sopt = dataclasses.replace(opt, tolerance=opt.tolerance * 1.6, corner_angle=max(opt.corner_angle, 60), extra=extra)
 
     ex_s = dict(sopt.extra)
