@@ -324,7 +324,10 @@ def primitive_closed(P, s, w, loose=1.0):
         # tolerances would let almost any shape "fit"; only allow the simple
         # polygons such details really are, else leave it to the curve fitter
         V = fit_polygon(P, s, w, True, max_vertices=4)
-        return polygon_shape(V, True) if V is not None else None
+        if V is not None:
+            return polygon_shape(V, True)
+        he = fit_half_ellipse(P, s, w)
+        return he[0] if he is not None else None
     e = fit_circle_ellipse(P, s, w)
     if e is not None:
         cands.append(e)
@@ -346,6 +349,9 @@ def primitive_closed(P, s, w, loose=1.0):
     td = fit_teardrop(P, s, w)
     if td is not None:
         cands.append(td)
+    he = fit_half_ellipse(P, s, w)
+    if he is not None:
+        cands.append(he)
     if not cands:
         return None
 
@@ -628,6 +634,65 @@ def fit_pin(P, s, w):
     if rms < 0.25 * w + 0.2 * s and d1.max() < 0.7 * w + 0.5 * s and d2.max() < 0.8 * w + 0.5 * s:
         return sh, rms
     return None
+
+
+def half_ellipse_shape(A, B, h):
+    """D shape: straight edge A->B, then half an ellipse back to A bulging
+    by h to the right of A->B (3 anchors)."""
+    M = (A + B) / 2
+    u = (B - A) / 2                       # semi axis along the chord
+    v = np.array([u[1], -u[0]])
+    v = v / (np.linalg.norm(v) + 1e-12) * h   # semi axis across
+    C = M + v                             # apex
+    segs = [("L", B.copy()),
+            ("C", B + KAPPA * v, C + KAPPA * u, C.copy()),
+            ("C", C - KAPPA * u, A + KAPPA * v, A.copy())]
+    return ("path", (A.copy(), segs))
+
+
+def fit_half_ellipse(P, s, w):
+    """A closed shape made of one straight edge and a half ellipse (an awning
+    scallop, the rounded end of a rolled map).  Returns (shape, rms) or None."""
+    idx = dp_closed(P, 0.6 * s + 0.15 * w)
+    if len(idx) < 3:
+        return None
+    k = len(idx)
+    best = None
+    for j in range(k):
+        A, B = P[idx[j]], P[idx[(j + 1) % k]]
+        L = np.linalg.norm(B - A)
+        if L < 1.5 * w:
+            continue
+        # the chord must be straight in the data too
+        i0, i1 = idx[j], idx[(j + 1) % k]
+        seg = P[i0:i1 + 1] if i1 > i0 else np.vstack([P[i0:], P[:i1 + 1]])
+        d = (B - A) / L
+        if min(abs(d[0]), abs(d[1])) > np.sin(np.radians(6)):
+            continue              # designers draw these with a level edge
+        nrm = np.array([d[1], -d[0]])
+        if np.abs((seg - A) @ nrm).max() > 0.3 * w + 0.3 * s:
+            continue
+        # the straight edge runs over the full width (its ends were rounded
+        # off by the line joins)
+        t = (P - A) @ d
+        A, B = A + t.min() * d, A + t.max() * d
+        L = np.linalg.norm(B - A)
+        if L < 3 * w:
+            continue
+        off = (P - A) @ nrm
+        h = off.max()
+        if h < 0.2 * L or h > 1.5 * L or off.min() < -0.4 * w:
+            continue
+        for sgn in (1,):
+            sh = half_ellipse_shape(A, B, h)
+            Q = shape_points(sh)
+            e1 = _nearest_dist(P, Q)
+            e2 = _nearest_dist(Q, P)
+            rms = float(np.sqrt(np.mean(e1 ** 2)))
+            if e1.max() < 0.35 * w + 0.5 * s and e2.max() < 0.35 * w + 0.5 * s and rms < 0.12 * w + 0.2 * s:
+                if best is None or rms < best[1]:
+                    best = (sh, rms)
+    return best
 
 
 def fit_teardrop(P, s, w):

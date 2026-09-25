@@ -33,8 +33,6 @@ def test_repeated_parts_are_identical():
     assert len(boxes) == 3
     rel = []
     for kind, (start, segs) in boxes:
-        pts = np.array([start] + [sg[-1] for sg in segs])
-        rel.append(np.round(pts - pts.min(0), 2))
-    rel.sort(key=lambda a: len(a))
-    assert all(len(r) == len(rel[0]) for r in rel)
-    assert all(np.allclose(np.sort(r, axis=0), np.sort(rel[0], axis=0), atol=0.05) for r in rel)
+        pts = np.array([sg[-1] for sg in segs])          # anchors, each once
+        rel.append(sorted(map(tuple, np.round(pts - pts.min(0), 1))))
+    assert all(r == rel[0] for r in rel)

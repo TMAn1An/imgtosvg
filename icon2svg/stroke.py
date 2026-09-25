@@ -875,13 +875,19 @@ def trace_strokes(work, opt, s):
     if opt.extra.get("tidy", True):
         # one anchor where two sit almost on top of each other, fewer smooth anchors
         from .tidy import tidy
-        shapes = tidy(shapes, w, opt.extra.get("tidy_chord", 1.0), opt.extra.get("tidy_tol", 0.12))
+        shapes = tidy(shapes, w, opt.extra.get("tidy_chord", 1.0), opt.extra.get("tidy_tol", 0.12),
+                      opt.extra.get("bent", True))
         if opt.extra.get("corners", True):
             # sharp or rounded, and how round: decided by comparing with the ink
             from .corners import merge_double_lines, optimize_corners, straighten_curves
             shapes = straighten_curves(shapes, work, w)
             shapes = optimize_corners(shapes, work, w)
             shapes = merge_double_lines(shapes, w)
+            if opt.extra.get("bent", True):
+                # chains of short straight pieces that bend a little: one curve
+                from .tidy import bent_lines_to_curve
+                shapes = [(k, bent_lines_to_curve(d[0], d[1], k == "path", w)) if k != "circle" else (k, d)
+                          for k, d in shapes]
         if opt.extra.get("refine", True):
             from .refine import refine_shapes
             shapes = refine_shapes(shapes, work, w)
@@ -891,6 +897,14 @@ def trace_strokes(work, opt, s):
         # identical parts drawn once and copied
         from .repeat import unify_repeats
         shapes = regularize(unify_repeats(shapes, work, w), s, w)
+    if opt.extra.get("holes", True) and opt.extra.get("primitives", True):
+        # every enclosed white area is the inside of one closed shape
+        from .holes import repair_holes
+        shapes = regularize(repair_holes(shapes, work, w, s, smooth), s, w)
+    if opt.extra.get("mirror", True) and opt.symmetry:
+        # a symmetric icon: one half drawn, the other half its mirror image
+        from .mirror import mirror_shapes
+        shapes = mirror_shapes(shapes, work, w)
     if opt.extra.get("fill_solid", True) and opt.mode in ("stroke", "designer"):
         fills = fills + _solid_patches(shapes, work, w, opt, s)
     return shapes, fills, w

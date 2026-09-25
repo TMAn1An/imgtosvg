@@ -100,7 +100,7 @@ def collapse_short(start, segs, closed, w, max_chord):
     return _from_ctrls(ctrls)
 
 
-def tidy(shapes, w, max_chord=1.0, simplify_tol=0.12):
+def tidy(shapes, w, max_chord=1.0, simplify_tol=0.12, bent=True):
     """w: line width in the shapes' units."""
     out = []
     for kind, data in shapes:
@@ -112,7 +112,60 @@ def tidy(shapes, w, max_chord=1.0, simplify_tol=0.12):
         try:
             start, segs = collapse_short(start, segs, closed, w, max_chord * w)
             segs = simplify(start, segs, closed, simplify_tol * w, keep_line=1.5 * w)
+            # a chain of straight pieces bending a little is one gentle curve
+            if bent:
+                start, segs = bent_lines_to_curve(start, segs, closed, w)
         except Exception:  # never lose a shape over a clean-up step
             start, segs = data
         out.append((kind, (start, segs)))
     return out
+
+
+def bent_lines_to_curve(start, segs, closed, w, max_bend=16.0, tol=0.22):
+    """Runs of 2+ straight pieces that each turn only a little (a traced
+    gentle curve) become one cubic curve when it stays within tol*w."""
+    from .bezier import fit_single
+    ctrls = _to_ctrls(start, segs)
+    n = len(ctrls)
+    if n < 2:
+        return start, segs
+    cosb = np.cos(np.radians(max_bend))
+    unit = lambda v: v / (np.linalg.norm(v) + 1e-12)
+    out, i = [], 0
+    while i < n:
+        if not ctrls[i][1]:
+            out.append(ctrls[i])
+            i += 1
+            continue
+        j = i
+        short = lambda k: np.linalg.norm(ctrls[k][0][3] - ctrls[k][0][0]) < 4.0 * w
+        while j + 1 < n and ctrls[j + 1][1] and short(j) and short(j + 1) and \
+                unit(ctrls[j][0][3] - ctrls[j][0][0]) @ unit(ctrls[j + 1][0][3] - ctrls[j + 1][0][0]) > cosb:
+            j += 1
+        # a traced curve is a chain of several short pieces; long straight
+        # edges are real lines and stay
+        if j >= i + 2:
+            run = ctrls[i:j + 1]
+            pts = np.vstack([np.linspace(c[0], c[3], 8)[:-1] for c, _ in run] + [run[-1][0][3][None]])
+            t1 = unit(run[0][0][3] - run[0][0][0])
+            t2 = -unit(run[-1][0][3] - run[-1][0][0])
+            c, err = fit_single(pts, run[0][0][0], run[-1][0][3], t1, t2)
+            ch = run[-1][0][3] - run[0][0][0]
+            L = np.linalg.norm(ch)
+            straight = L > 1e-9 and np.abs((pts - run[0][0][0]) @ np.array([-ch[1], ch[0]]) / L).max() < 0.1 * w
+            if straight:
+                A, B = run[0][0][0], run[-1][0][3]
+                out.append([np.array([A, A + (B - A) / 3, A + 2 * (B - A) / 3, B]), True])
+                i = j + 1
+                continue
+            if err.max() < tol * w:
+                out.append([np.array(c, float), False])
+                i = j + 1
+                continue
+        out.append(ctrls[i])
+        i += 1
+    s0, sg = _from_ctrls(out)
+    if closed:
+        sg[-1] = sg[-1][:-1] + (s0.copy(),)
+    return s0, sg
+

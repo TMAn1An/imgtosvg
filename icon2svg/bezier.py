@@ -192,7 +192,7 @@ def _t_end(c):
     return unit(v)
 
 
-def simplify(start, segs, closed, tol, corner_deg=35.0, straight_tol=0.08, keep_line=3.0):
+def simplify(start, segs, closed, tol, corner_deg=35.0, straight_tol=0.08, keep_line=3.0, line_bend_deg=None):
     """Greedy anchor removal (like Illustrator's Simplify): repeatedly drop the
     smooth anchor whose two neighbouring segments can be replaced by one cubic
     with the smallest error, while that error stays below tol."""
@@ -213,7 +213,8 @@ def simplify(start, segs, closed, tol, corner_deg=35.0, straight_tol=0.08, keep_
             long_a = ctrls[i - 1][1] and np.linalg.norm(a[3] - a[0]) > keep_line
             long_b = ctrls[i][1] and np.linalg.norm(b[3] - b[0]) > keep_line
             if long_a or long_b:
-                if not (ctrls[i - 1][1] and ctrls[i][1]) or _t_end(a) @ _t_start(b) < 0.9995:
+                bend_ok = line_bend_deg is not None and _t_end(a) @ _t_start(b) > np.cos(np.radians(line_bend_deg))
+                if not bend_ok and (not (ctrls[i - 1][1] and ctrls[i][1]) or _t_end(a) @ _t_start(b) < 0.9995):
                     continue
             if _t_end(a) @ _t_start(b) < cos_lim:
                 continue

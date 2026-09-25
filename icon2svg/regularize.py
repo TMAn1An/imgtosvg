@@ -183,4 +183,149 @@ def regularize(shapes, s, w):
     shapes = align(shapes, s, w)
     shapes = merge_collinear(shapes, s, w)
     shapes = align(shapes, s, w)
+    shapes = collinear_snap(shapes, w)
     return shapes
+
+
+def collinear_snap(shapes, w, deg=5.0, off=0.6):
+    """Straight pieces that lie on one line (a window mullion cut by every
+    cross bar, a floor line broken at the wall) are put onto exactly one
+    common line, so they continue each other without jogs."""
+    from .tidy import _from_ctrls, _to_ctrls
+    eds = []
+    for kind, data in shapes:
+        eds.append(None if kind == "circle" else _to_ctrls(*data))
+    segs = []
+    for a, ctrls in enumerate(eds):
+        if ctrls is None:
+            continue
+        for j, (c, ln) in enumerate(ctrls):
+            L = np.linalg.norm(c[3] - c[0])
+            if ln and L > 1.2 * w:
+                d = (c[3] - c[0]) / L
+                if d[0] < 0 or (abs(d[0]) < 1e-9 and d[1] < 0):
+                    d = -d
+                nrm = np.array([-d[1], d[0]])
+                t0, t1 = sorted([c[0] @ d, c[3] @ d])
+                segs.append((a, j, d, float(nrm @ c[0]), t0, t1, L))
+    n = len(segs)
+    parent = list(range(n))
+
+    def find(i):
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+    cos_lim = np.cos(np.radians(deg))
+    for i in range(n):
+        for k in range(i + 1, n):
+            a = segs[i]
+            b = segs[k]
+            if abs(a[2] @ b[2]) < cos_lim:
+                continue
+            # offset of b's end points from a's line, and gap along it
+            ca = eds[a[0]][a[1]][0]
+            cb = eds[b[0]][b[1]][0]
+            nrm = np.array([-a[2][1], a[2][0]])
+            if max(abs((cb[0] - ca[0]) @ nrm), abs((cb[3] - ca[0]) @ nrm)) > off * w:
+                continue
+            s0, s1 = sorted([(cb[0] - ca[0]) @ a[2], (cb[3] - ca[0]) @ a[2]])
+            la = a[6]
+            gap = max(s0 - la, -s1, 0.0)
+            if gap > 1.5 * w:
+                continue
+            parent[find(i)] = find(k)
+    groups = {}
+    for i in range(n):
+        groups.setdefault(find(i), []).append(i)
+    lines = []          # (point on line, normal) per group
+    seg_line = {}
+    for g in groups.values():
+        if len(g) < 2:
+            continue
+        P, W = [], []
+        for i in g:
+            c = eds[segs[i][0]][segs[i][1]][0]
+            P += [c[0], c[3]]
+            W += [segs[i][6]] * 2
+        P, W = np.array(P), np.array(W)
+        m = (P * W[:, None]).sum(0) / W.sum()
+        C = ((P - m) * W[:, None]).T @ (P - m)
+        d = np.linalg.eigh(C)[1][:, -1]
+        if abs(d[0]) > np.cos(np.radians(deg)):
+            d = np.array([1.0, 0.0])
+        elif abs(d[1]) > np.cos(np.radians(deg)):
+            d = np.array([0.0, 1.0])
+        nrm = np.array([-d[1], d[0]])
+        if np.abs((P - m) @ nrm).max() > off * w:
+            continue
+        for i in g:
+            seg_line[(segs[i][0], segs[i][1])] = len(lines)
+        lines.append((m, nrm))
+    if not lines:
+        return shapes
+    # every anchor; anchors closer than 0.4 w are one junction
+    from scipy.spatial import cKDTree
+    refs, pts = [], []
+    for a_, ctrls in enumerate(eds):
+        if ctrls is None:
+            continue
+        for j, (c, ln) in enumerate(ctrls):
+            for e in (0, 3):
+                refs.append((a_, j, e))
+                pts.append(c[e].copy())
+    pts = np.array(pts)
+    par = list(range(len(pts)))
+
+    def f2(i):
+        while par[i] != i:
+            par[i] = par[par[i]]
+            i = par[i]
+        return i
+    for i, k in cKDTree(pts).query_pairs(0.4 * w):
+        par[f2(i)] = f2(k)
+    clusters = {}
+    for i in range(len(pts)):
+        clusters.setdefault(f2(i), []).append(i)
+    newpos = {}
+    for idx in clusters.values():
+        ls = sorted({seg_line[(refs[i][0], refs[i][1])] for i in idx if (refs[i][0], refs[i][1]) in seg_line})
+        if not ls:
+            continue
+        x0 = pts[idx].mean(0)
+        A = [np.sqrt(1e-3) * np.eye(2)]
+        bvec = [np.sqrt(1e-3) * x0]
+        for li in ls:
+            m, nrm = lines[li]
+            A.append(nrm[None, :])
+            bvec.append(np.array([nrm @ m]))
+        x = np.linalg.lstsq(np.vstack(A), np.concatenate(bvec), rcond=None)[0]
+        if np.linalg.norm(x - x0) > 1.0 * w:
+            continue
+        for i in idx:
+            newpos[i] = x
+    ri = {r: i for i, r in enumerate(refs)}
+    for a_, ctrls in enumerate(eds):
+        if ctrls is None:
+            continue
+        for j, (c, ln) in enumerate(ctrls):
+            for e, h in ((0, 1), (3, 2)):
+                i = ri[(a_, j, e)]
+                if i in newpos:
+                    dlt = newpos[i] - c[e]
+                    c[e] = newpos[i].copy()
+                    if not ln:
+                        c[h] = c[h] + dlt
+            if ln:
+                c[1] = c[0] + (c[3] - c[0]) / 3
+                c[2] = c[0] + 2 * (c[3] - c[0]) / 3
+    out = []
+    for (kind, data), ctrls in zip(shapes, eds):
+        if ctrls is None:
+            out.append((kind, data))
+            continue
+        start, segs2 = _from_ctrls(ctrls)
+        if kind == "path":
+            segs2[-1] = segs2[-1][:-1] + (start.copy(),)
+        out.append((kind, (start, segs2)))
+    return out
