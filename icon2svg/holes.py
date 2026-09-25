@@ -162,3 +162,54 @@ def _offset_polygon(mask, w, max_vertices=4):
             return None
         out.append(np.asarray(x, float))
     return polygon_shape(out, True)
+
+
+def share_edges(shapes, w, max_pair=1.6):
+    """Two polygons that sit back to back (the two halves of a compass
+    needle) share one edge: the facing edges are replaced by one common
+    edge (their end points averaged), drawn once, so nothing overlaps."""
+    polys = []
+    for i, (k, d) in enumerate(shapes):
+        if k == "path" and all(sg[0] == "L" for sg in d[1]) and 3 <= len(d[1]) <= 6:
+            polys.append((i, [np.asarray(sg[1], float) for sg in d[1]]))
+    shapes = list(shapes)
+    used = set()
+    for ai in range(len(polys)):
+        for bi in range(ai + 1, len(polys)):
+            ia, A = polys[ai]
+            ib, B = polys[bi]
+            if ia in used or ib in used:
+                continue
+            best = None
+            for ea in range(len(A)):
+                a0, a1 = A[ea - 1], A[ea]
+                for eb in range(len(B)):
+                    b0, b1 = B[eb - 1], B[eb]
+                    for flip in (False, True):
+                        c0, c1 = (b1, b0) if flip else (b0, b1)
+                        d = max(np.linalg.norm(a0 - c0), np.linalg.norm(a1 - c1))
+                        if d < max_pair * w and (best is None or d < best[0]):
+                            best = (d, ea, eb, flip)
+            if best is None:
+                continue
+            _, ea, eb, flip = best
+            a0, a1 = A[ea - 1], A[ea]
+            b0, b1 = B[eb - 1], B[eb]
+            c0, c1 = (b1, b0) if flip else (b0, b1)
+            m0, m1 = (a0 + c0) / 2, (a1 + c1) / 2
+            if np.linalg.norm(m1 - m0) < 1.5 * w:
+                continue
+            NA = [v.copy() for v in A]
+            NA[ea - 1], NA[ea] = m0.copy(), m1.copy()
+            NB = [v.copy() for v in B]
+            if flip:
+                NB[eb - 1], NB[eb] = m1.copy(), m0.copy()
+            else:
+                NB[eb - 1], NB[eb] = m0.copy(), m1.copy()
+            # A keeps the shared edge (closed); B is drawn without it (open)
+            shapes[ia] = ("path", (NA[-1].copy(), [("L", v.copy()) for v in NA]))
+            n = len(NB)
+            order = [NB[(eb + k) % n] for k in range(n)]
+            shapes[ib] = ("open", (order[0].copy(), [("L", v.copy()) for v in order[1:]]))
+            used |= {ia, ib}
+    return shapes
