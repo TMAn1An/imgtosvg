@@ -262,3 +262,147 @@ def remove_overlaps(shapes, work, w):
     for i in range(len(shapes)):
         out += alive[i]
     return out
+
+
+def _closest_on(shape, p, n=64):
+    """Closest point to p on shape (dense sampling + local refinement)."""
+    P = shape_points(shape, n)
+    d = np.linalg.norm(P - p, axis=1)
+    k = int(np.argmin(d))
+    # refine on the polyline segments around k
+    best = (d[k], P[k])
+    for j in (k - 1, k):
+        if 0 <= j < len(P) - 1:
+            a, b = P[j], P[j + 1]
+            ab = b - a
+            t = np.clip((p - a) @ ab / (ab @ ab + 1e-12), 0, 1)
+            q = a + t * ab
+            dq = np.linalg.norm(q - p)
+            if dq < best[0]:
+                best = (dq, q)
+    return best
+
+
+def _ray_hit(p, dirv, polys, max_t):
+    """Smallest |t| (t in [-max_t, max_t]) where p + t*dirv crosses a polyline."""
+    best = None
+    nrm = np.array([-dirv[1], dirv[0]])
+    eps = 1e-6
+    for P in polys:
+        s0 = (P[:-1] - p) @ nrm
+        s1 = (P[1:] - p) @ nrm
+        s0 = np.where(np.abs(s0) < eps, 0.0, s0)
+        s1 = np.where(np.abs(s1) < eps, 0.0, s1)
+        cross = np.flatnonzero(s0 * s1 <= 0)
+        for j in cross:
+            den = s0[j] - s1[j]
+            if abs(den) < 1e-9:
+                # the other line runs along the ray: its nearer end is the hit
+                ts = [(P[j] - p) @ dirv, (P[j + 1] - p) @ dirv]
+            else:
+                q = P[j] + s0[j] / den * (P[j + 1] - P[j])
+                ts = [(q - p) @ dirv]
+            for t in ts:
+                if abs(t) <= max_t and (best is None or abs(t) < abs(best)):
+                    best = t
+    return best
+
+
+def weld_ends(shapes, w, reach=1.3):
+    """Every free end of an open stroke that stops near another line is
+    extended or shortened along its own direction until it lies exactly on
+    that line's centre: the lines touch, with no gap and no overlap."""
+    from .geometry import ellipse_shape
+    shapes = [(k, d) for k, d in shapes]
+    polys = []
+    for k, d in shapes:
+        if k == "circle":
+            cx, cy, r = d
+            polys.append(shape_points(ellipse_shape(cx, cy, r, r), 64))
+        else:
+            polys.append(shape_points((k, d), 32))
+    for i, (kind, data) in enumerate(shapes):
+        if kind != "open":
+            continue
+        start, segs = data
+        start = np.asarray(start, float).copy()
+        segs = [tuple(x if isinstance(x, str) else np.asarray(x, float).copy() for x in sg) for sg in segs]
+        others = [P for j, P in enumerate(polys) if j != i]
+        if not others:
+            continue
+        for end in (0, 1):
+            if end == 0:
+                p = start
+                q = np.asarray(segs[0][1], float)
+            else:
+                p = np.asarray(segs[-1][-1], float)
+                q = np.asarray(segs[-1][2], float) if segs[-1][0] == "C" else \
+                    (np.asarray(segs[-2][-1], float) if len(segs) > 1 else start)
+            dirv = p - q
+            nd = np.linalg.norm(dirv)
+            if nd < 1e-9:
+                continue
+            dirv /= nd
+            # only ends that stop near another line (not free ends in the open)
+            near = min(np.min(np.linalg.norm(P - p, axis=1)) for P in others)
+            if near > reach * w:
+                continue
+            t = _ray_hit(p, dirv, others, reach * w)
+            if t is None or abs(t) < 1e-3:
+                continue
+            target = p + t * dirv
+            if end == 0:
+                dl = target - start
+                start = target.copy()
+                if segs[0][0] == "C":
+                    segs[0] = ("C", segs[0][1] + dl, segs[0][2], segs[0][3])
+            else:
+                sg = segs[-1]
+                dl = target - sg[-1]
+                segs[-1] = ("L", target.copy()) if sg[0] == "L" else ("C", sg[1], sg[2] + dl, target.copy())
+        shapes[i] = (kind, (start, segs))
+        polys[i] = shape_points(shapes[i], 32)
+    return _join_facing_ends(shapes, w, reach, polys)
+
+
+def _join_facing_ends(shapes, w, reach, polys):
+    """Two free ends that face each other across a small gap (a line broken
+    by a cut) and touch nothing else meet in the middle."""
+    ends = []
+    for i, (k, d) in enumerate(shapes):
+        if k != "open":
+            continue
+        start, segs = d
+        for e, p in ((0, np.asarray(start, float)), (1, np.asarray(segs[-1][-1], float))):
+            on_line = any(np.min(np.linalg.norm(P - p, axis=1)) < 0.15 * w
+                          for j, P in enumerate(polys) if j != i)
+            if not on_line:
+                ends.append((i, e, p))
+    moved = {}
+    for a in range(len(ends)):
+        for b in range(a + 1, len(ends)):
+            ia, ea, pa = ends[a]
+            ib, eb, pb = ends[b]
+            if ia == ib or (ia, ea) in moved or (ib, eb) in moved:
+                continue
+            d = np.linalg.norm(pa - pb)
+            if 1e-3 < d < reach * w:
+                m = (pa + pb) / 2
+                moved[(ia, ea)] = m
+                moved[(ib, eb)] = m
+    out = list(shapes)
+    for (i, e), m in moved.items():
+        k, (start, segs) = out[i]
+        start = np.asarray(start, float).copy()
+        segs = list(segs)
+        if e == 0:
+            dl = m - start
+            start = m.copy()
+            if segs[0][0] == "C":
+                segs[0] = ("C", segs[0][1] + dl, segs[0][2], segs[0][3])
+        else:
+            sg = segs[-1]
+            dl = m - sg[-1]
+            segs[-1] = ("L", m.copy()) if sg[0] == "L" else ("C", sg[1], sg[2] + dl, m.copy())
+        out[i] = (k, (start, segs))
+    return out

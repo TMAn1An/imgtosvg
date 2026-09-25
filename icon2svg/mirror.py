@@ -110,6 +110,15 @@ def mirror_shapes(shapes, work, w, min_score=0.85):
         if v is None:
             continue
         cst = _cost(v, work, ref, w)
+        # the other half's leftovers the copies make unnecessary go
+        other = (lambda P: P[:, 0].min() > c - 0.3 * w) if master_left else (lambda P: P[:, 0].max() < c + 0.3 * w)
+        for sh in list(v):
+            if sh[0] == "circle" or not other(shape_points(sh, 12)):
+                continue
+            trial = [x for x in v if x is not sh]
+            ct = _cost(trial, work, ref, w)
+            if ct <= cst + 0.1:
+                v, cst = trial, ct
         if cst < best[0]:
             best = (cst, v)
     return best[1]

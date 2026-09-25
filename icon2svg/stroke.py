@@ -902,14 +902,18 @@ def trace_strokes(work, opt, s):
         from .holes import repair_holes
         from .holes import share_edges
         shapes = share_edges(regularize(repair_holes(shapes, work, w, s, smooth), s, w), w)
-    if opt.extra.get("mirror", True) and opt.symmetry:
-        # a symmetric icon: one half drawn, the other half its mirror image
-        from .mirror import mirror_shapes
-        shapes = mirror_shapes(shapes, work, w)
     if opt.extra.get("overlap", True):
         # never a line on top of a line: shared pieces kept once, hidden parts cut
         from .overlap import remove_overlaps
         shapes = remove_overlaps(shapes, work, w)
+    if opt.extra.get("mirror", True) and opt.symmetry:
+        # a symmetric icon: one half drawn, the other half its mirror image
+        from .mirror import mirror_shapes
+        shapes = mirror_shapes(shapes, work, w)
+    if opt.extra.get("weld", True):
+        # lines that meet touch exactly: no gap, no overlap
+        from .overlap import weld_ends
+        shapes = weld_ends(shapes, w)
     if opt.extra.get("fill_solid", True) and opt.mode in ("stroke", "designer"):
         fills = fills + _solid_patches(shapes, work, w, opt, s)
     return shapes, fills, w
