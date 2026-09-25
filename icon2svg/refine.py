@@ -213,12 +213,14 @@ def iou(svg, ref):
     return (a & b).sum() / max((a | b).sum(), 1)
 
 
-def refine_width(strokes, fills, ink, w, dec=2, zoom=4):
+def refine_width(strokes, fills, ink, w, dec=2, zoom=None):
     """The line weight (in `ink` pixels) whose rendering best matches the ink."""
     try:
         import cv2
         from .tracer import shapes_to_d
         H, W = ink.shape
+        if zoom is None:
+            zoom = int(np.clip(round(800 / max(H, W)), 1, 4))
         ref = cv2.resize(ink, (W * zoom, H * zoom), interpolation=cv2.INTER_CUBIC)
         d = shapes_to_d(strokes, dec + 1)
         fd = f'<path d="{shapes_to_d(fills, dec + 1)}"/>' if fills else ""

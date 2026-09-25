@@ -634,23 +634,30 @@ def trace(img, opt=None, return_shapes=False):
     ex.setdefault("wide_factor", 0.4)
     oopt = dataclasses.replace(opt, corner_angle=max(opt.corner_angle, 55), min_line=max(opt.min_line, 3.0),
                                tolerance=opt.tolerance * 1.33, extra=ex)
-    shapes = []
-    src = work
+    def outline_of(src, o):
+        out = []
+        for c in extract_contours(src, opt, s):
+            try:
+                out.append(fit_path(c, True, o, s))
+            except Exception:  # never lose a shape: fall back to a polygon
+                pts = c[:: max(1, len(c) // 64)]
+                out.append(("path", (pts[0], [("L", p) for p in pts[1:]] + [("L", pts[0])])))
+        return out
+
+    shapes = outline_of(work, oopt)
     if opt.extra.get("retrace", True):
         # render -> retrace: for a line icon, draw the clean stroke geometry
         # (uniform width, exact shapes) at high resolution and trace the
-        # outline of that perfect image instead of the noisy input
+        # outline of that perfect image instead of the noisy input.  Used
+        # when it matches the input about as well, with far fewer anchors
         clean = _clean_line_raster(work, opt, s)
         if clean is not None:
-            src = clean
             # the clean image has no noise: only truly straight edges are lines
-            oopt = dataclasses.replace(oopt, line_tolerance=opt.line_tolerance * 0.35)
-    for c in extract_contours(src, opt, s):
-        try:
-            shapes.append(fit_path(c, True, oopt, s))
-        except Exception:  # never lose a shape: fall back to a polygon
-            pts = c[:: max(1, len(c) // 64)]
-            shapes.append(("path", (pts[0], [("L", p) for p in pts[1:]] + [("L", pts[0])])))
+            alt = outline_of(clean, dataclasses.replace(oopt, line_tolerance=opt.line_tolerance * 0.35))
+            f_raw, f_alt = _fill_fidelity(work, shapes), _fill_fidelity(work, alt)
+            n_raw, n_alt = max(count_anchors(shapes), 1), count_anchors(alt)
+            if n_alt < n_raw and f_alt >= f_raw - (0.01 + 0.04 * (1 - n_alt / n_raw)):
+                shapes = alt
     d = shapes_to_d(shapes, opt.decimals, k)
     svg = head + f'  <path fill="{fill}" fill-rule="evenodd" d="{d}"/>\n</svg>\n'
     info = {"mode": "outline", "anchors": count_anchors(shapes), "shapes": len(shapes), "color": fill}
@@ -714,6 +721,38 @@ def _render_shapes(shape_list, size, z, stroke_w=None):
         cv2.fillPoly(img2, [np.array([P(p) for p in pts], np.int32) for pts, _ in polys], 255, cv2.LINE_8, sh)
         return img2
     return img
+
+
+def _fill_fidelity(work, shapes):
+    z = 3
+    h, w = work.shape
+    ref = cv2.resize(work, (w * z, h * z), interpolation=cv2.INTER_CUBIC) > 0.5
+    got = np.zeros((h * z, w * z), np.uint8)
+    from .bezier import bez
+    polys = []
+    for kind, data in shapes:
+        if kind == "circle":
+            cx, cy, r = data
+            t = np.linspace(0, 2 * np.pi, 64, endpoint=False)
+            polys.append(np.round(np.c_[cx + r * np.cos(t), cy + r * np.sin(t)] * z * 16).astype(np.int32))
+            continue
+        cur, segs = data
+        pts = [np.asarray(cur)]
+        for sg in segs:
+            if sg[0] == "L":
+                pts.append(np.asarray(sg[1]))
+            else:
+                pts.extend(bez(np.array([cur, sg[1], sg[2], sg[3]]), np.linspace(0, 1, 16))[1:])
+            cur = sg[-1]
+        polys.append(np.round(np.array(pts) * z * 16).astype(np.int32))
+    if polys:
+        acc = np.zeros_like(got, dtype=np.int32)
+        for P in polys:
+            m = np.zeros_like(got)
+            cv2.fillPoly(m, [P], 1, cv2.LINE_8, 4)
+            acc += m
+        got = (acc % 2).astype(bool)          # even-odd like the SVG
+    return (ref & got).sum() / max((ref | got).sum(), 1)
 
 
 def _stroke_fidelity(work, strokes, fills, sw):

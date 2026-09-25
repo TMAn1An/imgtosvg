@@ -66,11 +66,11 @@ def _ellipse_pts(cx, cy, rx, ry, n=64):
 
 
 def _nearest_dist(P, Q):
-    d = np.sqrt(((P[:, None, :] - Q[None, :, :]) ** 2).sum(-1))
-    return d.min(1)
+    """distance from every point of P to the nearest point of Q"""
+    from scipy.spatial import cKDTree
+    return cKDTree(np.asarray(Q, float)).query(np.asarray(P, float))[0]
 
 
-# ------------------------------------------------------- closed shapes ----
 def _ellipse_ls(Q):
     m = Q.mean(0)
     x, y = Q[:, 0] - m[0], Q[:, 1] - m[1]
@@ -195,7 +195,31 @@ def fit_polygon(P, s, w, closed=True, max_vertices=8):
     dev = dist_to_polyline(P, V, closed)
     if dev.max() > 1.6 * tol or np.sqrt(np.mean(dev ** 2)) > 0.55 * tol:
         return None
+    if _bowed_edges(P, idx, closed, 0.3 * tol):
+        return None       # the "edges" are arcs: a round shape, not a polygon
     return V
+
+
+def _bowed_edges(P, idx, closed, sag):
+    """True if the data between polygon vertices bulges consistently to one
+    side (an arc) by more than `sag` on a majority of the edges."""
+    n = len(P)
+    pairs = list(zip(idx, idx[1:] + ([idx[0]] if closed else [])))
+    bowed = 0
+    for a, b in pairs:
+        seg = P[a:b + 1] if b > a else np.vstack([P[a:], P[:b + 1]])
+        if len(seg) < 7:
+            continue
+        A, B = seg[0], seg[-1]
+        L = np.linalg.norm(B - A)
+        if L < 1e-9:
+            continue
+        nrm = np.array([-(B - A)[1], (B - A)[0]]) / L
+        d = (seg - A) @ nrm
+        mid = d[len(d) // 4: 3 * len(d) // 4]
+        if abs(np.mean(mid)) > sag and (np.sign(mid) == np.sign(np.mean(mid))).mean() > 0.85:
+            bowed += 1
+    return bowed >= max(2, len(pairs) // 2)
 
 
 def refine_vertices(P, idx, closed):

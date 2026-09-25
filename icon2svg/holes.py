@@ -131,19 +131,36 @@ def _offset_polygon(mask, w, max_vertices=8):
     P = c[:, 0, :].astype(float)
 
     def dev(V):
-        return np.min([np.abs(np.cross(V[(j + 1) % len(V)] - V[j], P - V[j]))
-                       / (np.linalg.norm(V[(j + 1) % len(V)] - V[j]) + 1e-9) for j in range(len(V))], axis=0).max()
+        """max distance of the hole outline from the polygon's edge segments"""
+        D = []
+        for j in range(len(V)):
+            a, b = V[j], V[(j + 1) % len(V)]
+            ab = b - a
+            t = np.clip((P - a) @ ab / (ab @ ab + 1e-9), 0, 1)
+            D.append(np.linalg.norm(P - (a + t[:, None] * ab), axis=1))
+        return np.min(D, axis=0).max()
     best = None
     # fewest corners whose polygon really is the hole (a triangle before a
     # triangle with one blunted corner)
     for eps in (0.1, 0.15, 0.2, 0.3, 0.4, 0.5):
         V = cv2.approxPolyDP(c, eps * w * Z, True)[:, 0, :].astype(float)
-        if 3 <= len(V) <= max_vertices and dev(V) <= 0.4 * w * Z:
+        if 3 <= len(V) <= max_vertices and dev(V) <= (0.4 if len(V) <= 4 else 0.25) * w * Z:
             if best is None or len(V) < len(best):
                 best = V
     if best is None:
         return None
     V = best
+    # edges that bulge are arcs of a round shape, not polygon edges
+    from .geometry import _bowed_edges
+    idx = sorted(int(np.argmin(np.linalg.norm(P - v, axis=1))) for v in V)
+    if _bowed_edges(P, idx, True, 0.12 * w * Z):
+        return None
+    if len(V) > 4:
+        # a round hole is not a polygon: compare with a circle/ellipse fit
+        from .geometry import fit_circle_ellipse
+        e = fit_circle_ellipse((P + 0.5) / Z, 1.0, w, robust=False, min_cover=0.9)
+        if e is not None:
+            return None
     V = (V + 0.5) / Z
     area = 0.5 * np.sum(V[:, 0] * np.roll(V[:, 1], -1) - np.roll(V[:, 0], -1) * V[:, 1])
     sgn = 1 if area > 0 else -1
